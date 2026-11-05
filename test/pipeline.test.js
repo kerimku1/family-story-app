@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { findClip, mergeLifeCard } from "../api/_lib/pipeline.js";
 import { STORY_SCHEMA } from "../api/_lib/ai.js";
+import { normalizeSupabaseUrl } from "../api/_lib/store.js";
 import { startTestServer } from "./test-server.js";
 
 test("findClip locates the quoted words and their times", () => {
@@ -17,6 +18,13 @@ test("mergeLifeCard adds new details and skips repeats", () => {
   const b = mergeLifeCard(a, { people: [{ name: "мама", relation: "mother", note: "x" }, { name: "Папа", relation: "father", note: "" }], phrases: ["ну вот!"] });
   assert.deepEqual(b.people.map((p) => p.name), ["Мама", "Папа"]);
   assert.equal(b.phrases.length, 1);
+});
+
+test("Supabase URL is cleaned from common copy-paste forms", () => {
+  const ok = "https://abcd1234.supabase.co";
+  for (const raw of [ok, ok + "/", ok + "/rest/v1/", ` ${ok}/rest/v1 `, "abcd1234.supabase.co", "https://supabase.com/dashboard/project/abcd1234/settings/api"]) {
+    assert.equal(normalizeSupabaseUrl(raw), ok, raw);
+  }
 });
 
 test("story schema follows structured-output rules", () => {

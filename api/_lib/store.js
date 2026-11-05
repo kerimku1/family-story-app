@@ -20,8 +20,20 @@ function must(result, what) {
   return result.data;
 }
 
+// Accept the forms people copy from Supabase: "https://ref.supabase.co", ".../rest/v1/",
+// or the dashboard address "https://supabase.com/dashboard/project/ref".
+export function normalizeSupabaseUrl(raw) {
+  const text = String(raw || "").trim();
+  if (!text) return "";
+  let u;
+  try { u = new URL(/^https?:\/\//i.test(text) ? text : "https://" + text); } catch { return text; }
+  const dash = u.pathname.match(/\/project\/([a-z0-9]+)/i);
+  if (/(^|\.)supabase\.com$/i.test(u.hostname) && dash) return `https://${dash[1]}.supabase.co`;
+  return u.origin;
+}
+
 function supabaseStore() {
-  const url = env("SUPABASE_URL").replace(/\/+$/, "");
+  const url = normalizeSupabaseUrl(env("SUPABASE_URL"));
   const key = env("SUPABASE_SECRET_KEY") || env("SUPABASE_SERVICE_ROLE_KEY");
   if (!url || !key) throw new Error("SUPABASE_URL and SUPABASE_SECRET_KEY must be set");
   const db = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
