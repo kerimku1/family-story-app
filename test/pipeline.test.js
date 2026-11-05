@@ -109,3 +109,31 @@ test("full flow: create → upload → story → approve → studio → family s
     server.close();
   }
 });
+
+test("typed answer: no transcription, story written from the text", async () => {
+  const { server, store, apiLog, url } = await startTestServer(8798);
+  try {
+    const post = (body) => fetch(url + "/api/teller", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then(async (r) => ({ status: r.status, body: await r.json() }));
+    const created = await fetch(url + "/api/create", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ from: "Мухамед", name: "Ата", lang: "kk" }) }).then((r) => r.json());
+    const t = new URL(created.tellerUrl).searchParams.get("t");
+
+    assert.equal((await post({ t, action: "text-answer", questionIndex: 2, questionText: "Q3", text: "   " })).status, 400);
+    const sent = await post({ t, action: "text-answer", questionIndex: 2, questionText: "Q3", text: "Мен ауылда тудым.\r\nҮйіміз ақ еді." });
+    assert.equal(sent.status, 200);
+
+    for (let i = 0; i < 50 && store.db.answers[0].status !== "ready"; i++) await new Promise((r) => setTimeout(r, 20));
+    const a = store.db.answers[0];
+    assert.equal(a.status, "ready", a.error || "");
+    assert.equal(a.audio_path, undefined);
+    assert.equal(a.transcript, "Мен ауылда тудым.\nҮйіміз ақ еді.");
+    assert.equal(apiLog.filter((c) => c.service === "elevenlabs").length, 0, "typed answers must not be transcribed");
+    const prompt = apiLog.find((c) => c.service === "anthropic").body.messages[0].content;
+    assert.match(prompt, /in writing in Kazakh/);
+    assert.match(prompt, /Үйіміз ақ еді/);
+
+    const view = await (await fetch(`${url}/api/teller?t=${t}`)).json();
+    assert.deepEqual(view.answered, [2]);
+  } finally {
+    server.close();
+  }
+});

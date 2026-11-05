@@ -66,12 +66,13 @@ export const STORY_SCHEMA = obj({
   follow_up_questions: list(str("A gentle question in the storyteller's language asking for a missing detail"), "2-4 follow-up questions")
 });
 
-export function storyPrompt({ name, lang, question, transcript, lifeCard }) {
+export function storyPrompt({ name, lang, question, transcript, lifeCard, typed = false }) {
+  const source = typed ? "their written answer" : "the transcript";
   return [
     `You are helping a family keep the life story of ${name || "a loved one"}.`,
-    `The storyteller answered this question by voice in ${LANG_NAME[lang] || "their language"}: "${question}"`,
+    `The storyteller answered this question ${typed ? "in writing" : "by voice"} in ${LANG_NAME[lang] || "their language"}: "${question}"`,
     "",
-    "Transcript of their answer:",
+    typed ? "Their written answer:" : "Transcript of their answer:",
     '"""',
     transcript,
     '"""',
@@ -80,11 +81,13 @@ export function storyPrompt({ name, lang, question, transcript, lifeCard }) {
     JSON.stringify(lifeCard || {}),
     "",
     "Rules:",
-    "- Use ONLY facts from the transcript. Never invent names, places, dates, colours or events. If something is unclear, leave it out.",
+    `- Use ONLY facts from ${source}. Never invent names, places, dates, colours or events. If something is unclear, leave it out.`,
     `- Write the title, story, captions and follow-up questions in ${LANG_NAME[lang] || "the storyteller's language"}.`,
-    "- Write the story in first person, keeping their own phrases, humour and way of speaking. Fix only obvious speech slips.",
+    `- Write the story in first person, keeping their own phrases, humour and way of ${typed ? "writing" : "speaking"}. Fix only obvious ${typed ? "typos" : "speech slips"}.`,
     "- The comic is for the family, so it must be respectful and warm. Skip anything painful the storyteller seemed unsure about sharing.",
-    "- Panel quotes must be copied word for word from the transcript so we can play their real voice.",
+    typed
+      ? "- Panel quotes must be copied word for word from their written answer."
+      : "- Panel quotes must be copied word for word from the transcript so we can play their real voice.",
     "- Visual descriptions for the artist are in English and should be specific: clothing, colours, objects, weather, era — but only from what was said or what is certain from the era and place."
   ].join("\n");
 }

@@ -8,6 +8,7 @@
   const ICON_MIC = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><path d="M12 17v4"/><path d="M8 21h8"/></svg>';
   const ICON_STOP = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/></svg>';
   const ICON_SPEAKER = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg>';
+  const ICON_KEYS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg>';
   const ICON_LOCK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>';
 
   const params = new URLSearchParams(location.search);
@@ -18,6 +19,16 @@
     if (l.startsWith("kk")) return "kk";
     if (l.startsWith("en")) return "en";
     return "ru";
+  }
+  function savedMode() {
+    try { return localStorage.getItem("story-mode") === "text" ? "text" : "voice"; } catch (e) { return "voice"; }
+  }
+  function draftKey(i) { return "story-draft:" + token + ":" + i; }
+  function loadDraft(i) {
+    try { return localStorage.getItem(draftKey(i)) || ""; } catch (e) { return ""; }
+  }
+  function saveDraft(i, text) {
+    try { if (text) localStorage.setItem(draftKey(i), text); else localStorage.removeItem(draftKey(i)); } catch (e) { /* storage blocked */ }
   }
   function savedLang() {
     try { return localStorage.getItem("story-lang:" + token) || ""; } catch (e) { return ""; }
@@ -43,6 +54,7 @@
     durationSec: 0,
     recording: false,
     sending: false,
+    inputMode: savedMode(),
     startedAt: 0,
     timerId: 0,
     notice: null,
@@ -291,9 +303,10 @@
       h("div", { class: "progress" }, h("span", { text: t.questionOf(i + 1, qs.length) }), dots),
       h("p", { class: "question", text: qs[i] }),
       h("button", { class: "btn btn-secondary", type: "button", onclick: speakQuestion, disabled: busy }, icon(ICON_SPEAKER), t.listen),
-      (!state.blob || state.recording) ? recorderBlock() : null,
+      modeSwitch(busy),
+      state.inputMode === "text" ? textBlock() : ((!state.blob || state.recording) ? recorderBlock() : null),
       state.notice ? h("div", { class: "notice " + state.notice.kind, role: "status", text: state.notice.text }) : null,
-      (state.blob && !state.recording) ? answerBlock() : null));
+      (state.inputMode === "voice" && state.blob && !state.recording) ? answerBlock() : null));
 
     const last = i === qs.length - 1;
     const done = state.answered.has(i);
@@ -309,6 +322,77 @@
         onclick: function () { if (last) go("done"); else { state.index = i + 1; go("question"); } }
       }, done ? t.next : t.skip)));
     if (state.answered.size) add(h("button", { class: "btn btn-quiet", type: "button", disabled: busy, onclick: function () { go("stories"); } }, t.myStories));
+  }
+
+  // Voice or text: the storyteller picks, and the phone remembers the choice.
+  function modeSwitch(busy) {
+    const t = T();
+    const option = function (mode, svg, label) {
+      return h("button", {
+        type: "button", class: "seg-btn", "aria-pressed": String(state.inputMode === mode), disabled: busy,
+        onclick: function () { setMode(mode); }
+      }, icon(svg), label);
+    };
+    return h("div", { class: "seg", role: "group", "aria-label": t.yourAnswer },
+      option("voice", ICON_MIC, t.modeVoice), option("text", ICON_KEYS, t.modeText));
+  }
+
+  function setMode(mode) {
+    if (state.recording || state.sending || state.inputMode === mode) return;
+    state.inputMode = mode;
+    try { localStorage.setItem("story-mode", mode); } catch (e) { /* storage blocked */ }
+    state.notice = null;
+    render();
+    if (mode === "text") {
+      const ta = document.getElementById("answer-text");
+      if (ta) ta.focus();
+    }
+  }
+
+  function textBlock() {
+    const t = T();
+    const index = state.index;
+    const ta = h("textarea", {
+      id: "answer-text", class: "answer-text", rows: "8", maxlength: "20000",
+      placeholder: t.textPh, "aria-label": t.yourAnswer, disabled: state.sending
+    });
+    ta.value = loadDraft(index);
+    ta.addEventListener("input", function () { saveDraft(index, ta.value); });
+    return h("div", { class: "answer" },
+      ta,
+      h("p", { class: "privacy" }, icon(ICON_LOCK), h("span", { text: t.privacyNoteText })),
+      h("button", { class: "btn btn-primary", type: "button", disabled: state.sending, onclick: function () { sendText(ta); } },
+        state.sending ? t.sending : t.send));
+  }
+
+  async function sendText(ta) {
+    const t = T();
+    const index = state.index;
+    const text = ta.value.trim();
+    if (!text) {
+      state.notice = { kind: "bad", text: t.textEmpty };
+      render();
+      const again = document.getElementById("answer-text");
+      if (again) again.focus();
+      return;
+    }
+    saveDraft(index, ta.value);
+    state.sending = true;
+    state.notice = null;
+    render();
+    try {
+      const out = await api("POST", "/api/teller", {
+        t: token, action: "text-answer", questionIndex: index, questionText: Q()[index], text: text
+      });
+      state.answered.add(index);
+      state.stories.push({ id: out.answerId, questionIndex: index, question: Q()[index], status: "uploaded", approval: "waiting" });
+      saveDraft(index, "");
+      state.notice = { kind: "good", text: t.saved };
+    } catch (e) {
+      state.notice = { kind: "bad", text: t.sendFail };
+    }
+    state.sending = false;
+    render();
   }
 
   function recorderBlock() {

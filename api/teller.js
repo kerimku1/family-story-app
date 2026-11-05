@@ -2,6 +2,7 @@
 // GET  ?t=TOKEN                                  → profile, answered questions, their own stories
 // POST { t, action: "upload-url", questionIndex, questionText, mime } → { answerId, uploadUrl }
 // POST { t, action: "uploaded", answerId, durationSec }               → starts transcription + writing
+// POST { t, action: "text-answer", questionIndex, questionText, text } → typed answer, starts writing
 // POST { t, action: "approve", answerId, approval: "approved"|"hidden" }
 // POST { t, action: "delete", answerId }                               → deletes the recording and story
 import { getStore } from "./_lib/store.js";
@@ -48,14 +49,32 @@ export default async function handler(req, res) {
 
     // Every action except upload-url works on one of this storyteller's own answers.
     let answer = null;
-    if (body.action !== "upload-url") {
+    if (body.action !== "upload-url" && body.action !== "text-answer") {
       answer = body.answerId ? await store.answerById(String(body.answerId)) : null;
       if (!answer || answer.storyteller_id !== teller.id) return fail(res, 404, "Answer not found");
     }
 
+    const index = Number(body.questionIndex);
+    const badIndex = !Number.isInteger(index) || index < 0 || index > 200;
+
+    if (body.action === "text-answer") {
+      if (badIndex) return fail(res, 400, "Bad question");
+      const text = String(body.text ?? "").replace(/\r\n?/g, "\n").trim().slice(0, 20000);
+      if (!text) return fail(res, 400, "Empty answer");
+      const created = await store.createAnswer({
+        storyteller_id: teller.id,
+        question_index: index,
+        question_text: cleanText(body.questionText, 500) || `Question ${index + 1}`,
+        status: "uploaded",
+        transcript: text,
+        words: []
+      });
+      await inBackground(processAnswer(store, created.id));
+      return send(res, 200, { answerId: created.id });
+    }
+
     if (body.action === "upload-url") {
-      const index = Number(body.questionIndex);
-      if (!Number.isInteger(index) || index < 0 || index > 200) return fail(res, 400, "Bad question");
+      if (badIndex) return fail(res, 400, "Bad question");
       const mime = cleanText(body.mime, 60) || "audio/webm";
       const created = await store.createAnswer({
         storyteller_id: teller.id,

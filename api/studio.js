@@ -24,6 +24,7 @@ function answerForStudio(a) {
     error: a.error,
     approval: a.approval,
     durationSec: a.duration_sec,
+    typed: !a.audio_path,
     createdAt: a.created_at,
     title: approved ? a.title : null,
     story: approved ? a.story : null,
@@ -75,7 +76,7 @@ export default async function handler(req, res) {
     if (body.action === "retry") {
       const answer = await store.answerById(String(body.answerId || ""));
       if (!answer) return fail(res, 404, "Answer not found");
-      if (!answer.audio_path || answer.status === "pending") return fail(res, 400, "Nothing uploaded yet");
+      if (answer.status === "pending" || (!answer.audio_path && !answer.transcript)) return fail(res, 400, "Nothing uploaded yet");
       await store.updateAnswer(answer.id, { status: "uploaded", error: null });
       await inBackground(processAnswer(store, answer.id));
       return send(res, 200, { ok: true });

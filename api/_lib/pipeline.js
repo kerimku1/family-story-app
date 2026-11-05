@@ -64,17 +64,26 @@ export async function processAnswer(store, answerId, { fetchImpl = fetch } = {})
     const teller = await store.storytellerById(answer.storyteller_id);
     answer = await store.updateAnswer(answerId, { status: "processing", error: null });
 
-    const audio = await store.download("recordings", answer.audio_path);
-    const heard = await transcribe(audio, { lang: teller.lang, mime: answer.mime, fetchImpl });
-    if (!heard.text) throw new Error("No speech was found in the recording");
-    await store.updateAnswer(answerId, { transcript: heard.text, words: heard.words });
+    const typed = !answer.audio_path;
+    let heard;
+    if (typed) {
+      // A typed answer: the text is already here, nothing to transcribe.
+      if (!answer.transcript) throw new Error("The answer is empty");
+      heard = { text: answer.transcript, words: [] };
+    } else {
+      const audio = await store.download("recordings", answer.audio_path);
+      heard = await transcribe(audio, { lang: teller.lang, mime: answer.mime, fetchImpl });
+      if (!heard.text) throw new Error("No speech was found in the recording");
+      await store.updateAnswer(answerId, { transcript: heard.text, words: heard.words });
+    }
 
     const written = await writeStory({
       name: teller.name,
       lang: teller.lang,
       question: answer.question_text,
       transcript: heard.text,
-      lifeCard: teller.life_card
+      lifeCard: teller.life_card,
+      typed
     }, { fetchImpl });
 
     const panels = (written.comic?.panels || []).map((p) => ({ ...p, voice_clip: findClip(heard.words, p.quote) }));

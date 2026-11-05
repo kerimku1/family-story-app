@@ -115,7 +115,7 @@
     const media = t.media.filter(function (m) { return m.answerId === a.id; });
     const head = h("div", { class: "toolbar" },
       h("h3", { text: "Q" + (a.questionIndex + 1) + ". " + (a.title || a.question) }),
-      badge(a.status), badge(a.approval),
+      badge(a.status), badge(a.approval), a.typed ? badge("typed") : null,
       a.durationSec ? h("span", { class: "meta", text: a.durationSec + "s" }) : null,
       (a.status === "failed" || a.status === "ready") ? h("button", { class: "btn btn-quiet", type: "button", disabled: busy === a.id, onclick: function () { retry(a); } }, a.status === "failed" ? "Retry" : "Rewrite") : null);
     const parts = [head];
@@ -139,7 +139,7 @@
         return h("div", { class: "panel" }, h("b", { text: "Character" }), h("span", { text: ch.name }), h("span", { class: "meta", text: ch.look }));
       })) : null,
       h("div", { class: "grid", style: "margin-top:12px" }, (c.panels || []).map(function (p, i) {
-        const clip = p.voice_clip ? "Voice clip " + p.voice_clip.start.toFixed(1) + "–" + p.voice_clip.end.toFixed(1) + "s" : "Voice clip: not found in transcript";
+        const clip = a.typed ? "Typed answer: no voice clip" : p.voice_clip ? "Voice clip " + p.voice_clip.start.toFixed(1) + "–" + p.voice_clip.end.toFixed(1) + "s" : "Voice clip: not found in transcript";
         return h("div", { class: "panel" },
           h("b", { text: "Panel " + (i + 1) }),
           h("span", { text: p.setting }),
