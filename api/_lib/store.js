@@ -10,14 +10,19 @@ export function getStore() {
   return cached;
 }
 
+// Environment values pasted into Vercel sometimes carry spaces, new lines or quotes.
+export function env(name) {
+  return String(process.env[name] || "").trim().replace(/^["']|["']$/g, "").trim();
+}
+
 function must(result, what) {
   if (result.error) throw new Error(`${what}: ${result.error.message}`);
   return result.data;
 }
 
 function supabaseStore() {
-  const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const url = env("SUPABASE_URL").replace(/\/+$/, "");
+  const key = env("SUPABASE_SECRET_KEY") || env("SUPABASE_SERVICE_ROLE_KEY");
   if (!url || !key) throw new Error("SUPABASE_URL and SUPABASE_SECRET_KEY must be set");
   const db = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
 

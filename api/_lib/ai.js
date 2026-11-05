@@ -1,13 +1,14 @@
 // Speech-to-text (ElevenLabs Scribe) and story writing (Claude).
+import { env } from "./store.js";
 
 const STT_LANG = { ru: "rus", kk: "kaz", en: "eng" };
 const LANG_NAME = { ru: "Russian", kk: "Kazakh", en: "English" };
 
 export async function transcribe(audioBlob, { lang, mime, fetchImpl = fetch } = {}) {
-  const key = process.env.ELEVENLABS_API_KEY;
+  const key = env("ELEVENLABS_API_KEY");
   if (!key) throw new Error("ELEVENLABS_API_KEY is not set");
   const form = new FormData();
-  form.append("model_id", process.env.ELEVENLABS_STT_MODEL || "scribe_v2");
+  form.append("model_id", env("ELEVENLABS_STT_MODEL") || "scribe_v2");
   form.append("file", audioBlob, "answer." + (String(mime).includes("mp4") ? "m4a" : "webm"));
   if (STT_LANG[lang]) form.append("language_code", STT_LANG[lang]);
   form.append("timestamps_granularity", "word");
@@ -89,7 +90,7 @@ export function storyPrompt({ name, lang, question, transcript, lifeCard }) {
 }
 
 export async function writeStory(input, { fetchImpl = fetch } = {}) {
-  const key = process.env.ANTHROPIC_API_KEY;
+  const key = env("ANTHROPIC_API_KEY");
   if (!key) throw new Error("ANTHROPIC_API_KEY is not set");
   const res = await fetchImpl("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -99,7 +100,7 @@ export async function writeStory(input, { fetchImpl = fetch } = {}) {
       "content-type": "application/json"
     },
     body: JSON.stringify({
-      model: process.env.CLAUDE_MODEL || "claude-sonnet-5-5",
+      model: env("CLAUDE_MODEL") || "claude-sonnet-5-5",
       max_tokens: 8000,
       messages: [{ role: "user", content: storyPrompt(input) }],
       output_config: { format: { type: "json_schema", schema: STORY_SCHEMA } }

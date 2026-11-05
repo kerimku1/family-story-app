@@ -42,7 +42,7 @@ export function baseUrl(req) {
 }
 
 export function isAdmin(req) {
-  const expected = process.env.STUDIO_PASSWORD || "";
+  const expected = String(process.env.STUDIO_PASSWORD || "").trim();
   const header = String(req.headers.authorization || "");
   const given = header.startsWith("Bearer ") ? header.slice(7) : "";
   if (!expected || !given) return false;
