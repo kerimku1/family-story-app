@@ -69,7 +69,7 @@
   const icon = (svg) => h("span", { class: "icon", svg: svg });
 
   // Прогресс хранится только на этом телефоне.
-  const progressKey = () => "story:" + state.from + ":" + state.name + ":" + state.lang;
+  const progressKey = () => "story:" + state.from + ":" + state.name;
   function loadProgress() {
     try { return JSON.parse(localStorage.getItem(progressKey()) || "{}") || {}; } catch (e) { return {}; }
   }
@@ -156,7 +156,7 @@
       const message = linkUi.shareMsg(state.form.name.trim()) + " " + state.createdLink;
       app.append(h("section", { class: "card" },
         h("h2", { text: t.linkReady }),
-        h("div", { class: "link-box", text: state.createdLink }),
+        h("div", { class: "link-box", text: readableLink(state.createdLink) }),
         h("a", { class: "btn btn-primary", href: "https://wa.me/?text=" + encodeURIComponent(message), target: "_blank", rel: "noopener" }, t.shareWa),
         h("a", { class: "btn btn-secondary", href: "https://t.me/share/url?url=" + encodeURIComponent(state.createdLink) + "&text=" + encodeURIComponent(linkUi.shareMsg(state.form.name.trim())), target: "_blank", rel: "noopener" }, t.shareTg),
         h("button", { class: "btn btn-quiet", type: "button", onclick: copyLink }, state.copied ? t.copied : t.copy)));
@@ -176,6 +176,10 @@
     state.createdLang = state.form.qlang;
     state.copied = false;
     render();
+  }
+
+  function readableLink(link) {
+    try { return decodeURI(link); } catch (e) { return link; }
   }
 
   async function copyLink() {
