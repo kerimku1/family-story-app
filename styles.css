@@ -120,6 +120,20 @@ audio { width: 100%; }
 }
 .small { font-size: 15px; color: var(--muted); }
 .answer { display: flex; flex-direction: column; gap: 12px; }
-.icon { display: inline-flex; }
+
+.icon { display: inline-flex; vertical-align: -4px; }
 .icon svg { width: 22px; height: 22px; }
-.btn:has(.icon) { gap: 10px; }
+.privacy { display: flex; gap: 10px; align-items: flex-start; font-size: 16px; color: var(--muted); }
+.privacy .icon svg { width: 20px; height: 20px; color: var(--good); }
+.story h2 { font-size: 22px; }
+.story-text { white-space: pre-wrap; line-height: 1.55; }
+.writing { animation: fade 1.8s ease-in-out infinite; }
+@keyframes fade { 50% { opacity: 0.45; } }
+@media (prefers-reduced-motion: reduce) { .writing { animation: none; } }
+.btn.danger { color: var(--rec); }
+.gallery { display: flex; flex-direction: column; gap: 18px; }
+.media-item { padding: 0; overflow: hidden; gap: 0; }
+.media-item img, .media-item video { display: block; width: 100%; height: auto; background: #000; }
+.media-item h2 { font-size: 20px; padding: 14px 16px; }
+.empty { text-align: center; padding: 32px 20px; }
+.empty .icon svg { width: 44px; height: 44px; color: var(--accent); }

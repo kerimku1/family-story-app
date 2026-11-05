@@ -1,0 +1,18 @@
+{
+  "name": "family-story-app",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Collect a person's life story by voice and turn it into comics and animated films for their family",
+  "scripts": {
+    "dev": "vercel dev",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.119.0",
+    "@vercel/functions": "^3.10.6"
+  }
+}

@@ -1,5 +1,5 @@
-// Пилотная страница: ссылка для близкого человека, вопросы, запись голосового ответа
-// и отправка файла через меню «Поделиться» (WhatsApp, Telegram). Сервер не нужен.
+// The storyteller's page and the "create a link" page.
+// Recordings go straight to private storage; nobody can play them back from the server.
 (function () {
   "use strict";
 
@@ -8,36 +8,48 @@
   const ICON_MIC = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><path d="M12 17v4"/><path d="M8 21h8"/></svg>';
   const ICON_STOP = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"/></svg>';
   const ICON_SPEAKER = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg>';
+  const ICON_LOCK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>';
 
   const params = new URLSearchParams(location.search);
+  const token = (params.get("t") || "").trim();
+
   function guessLang() {
     const l = (navigator.language || "ru").toLowerCase();
     if (l.startsWith("kk")) return "kk";
     if (l.startsWith("en")) return "en";
     return "ru";
   }
-  const urlLang = params.get("lang");
+  function savedLang() {
+    try { return localStorage.getItem("story-lang:" + token) || ""; } catch (e) { return ""; }
+  }
+
   const state = {
-    lang: urlLang && I18N[urlLang] ? urlLang : guessLang(),
-    name: (params.get("name") || "").trim().slice(0, 40),
-    from: (params.get("from") || "").trim().slice(0, 40),
-    mode: params.get("name") ? "story" : "create",
+    mode: token ? "story" : "create",
+    lang: guessLang(),
+    loading: Boolean(token),
+    loadError: "",
+    name: "",
+    from: "",
     screen: "welcome",
     index: 0,
-    privacy: "now",
+    answered: new Set(),
+    stories: [],
+    pollId: 0,
     recorder: null,
     stream: null,
     chunks: [],
     blob: null,
     blobUrl: "",
+    durationSec: 0,
     recording: false,
+    sending: false,
     startedAt: 0,
     timerId: 0,
     notice: null,
     form: { from: "", name: "", qlang: "" },
-    createdLink: "",
-    createdLang: "",
-    copied: false
+    created: null,
+    creating: false,
+    copied: ""
   };
   state.form.qlang = state.lang;
 
@@ -45,7 +57,12 @@
   const T = () => I18N[state.lang].ui;
   const Q = () => I18N[state.lang].questions;
 
-  // Небольшой помощник для создания элементов. Пользовательский текст всегда идёт через textContent.
+  // Small element helper. Text from people always goes through textContent.
+  // Append only real nodes (DOM append would print "null" for empty slots).
+  function add() {
+    Array.prototype.slice.call(arguments).flat(Infinity).forEach(function (n) { if (n) app.append(n); });
+  }
+
   function h(tag, props) {
     const node = document.createElement(tag);
     const kids = Array.prototype.slice.call(arguments, 2);
@@ -55,7 +72,7 @@
         if (v === null || v === undefined || v === false) return;
         if (k === "class") node.className = v;
         else if (k === "text") node.textContent = v;
-        else if (k === "svg") node.innerHTML = v; // только для статичных иконок выше
+        else if (k === "svg") node.innerHTML = v; // only the fixed icons above
         else if (k.indexOf("on") === 0 && typeof v === "function") node.addEventListener(k.slice(2), v);
         else node.setAttribute(k, v === true ? "" : String(v));
       });
@@ -68,28 +85,28 @@
   }
   const icon = (svg) => h("span", { class: "icon", svg: svg });
 
-  // Прогресс хранится только на этом телефоне.
-  const progressKey = () => "story:" + state.from + ":" + state.name;
-  function loadProgress() {
-    try { return JSON.parse(localStorage.getItem(progressKey()) || "{}") || {}; } catch (e) { return {}; }
-  }
-  function saveProgress(p) {
-    try { localStorage.setItem(progressKey(), JSON.stringify(p)); } catch (e) { /* хранилище недоступно */ }
-  }
-  function firstOpen() {
-    const p = loadProgress();
-    const i = Q().findIndex(function (_, k) { return !p[k]; });
-    return i === -1 ? 0 : i;
+  async function api(method, url, body) {
+    const res = await fetch(url, {
+      method: method,
+      headers: body ? { "content-type": "application/json" } : undefined,
+      body: body ? JSON.stringify(body) : undefined
+    });
+    let data = null;
+    try { data = await res.json(); } catch (e) { /* not JSON */ }
+    if (!res.ok) {
+      const err = new Error((data && data.error) || "HTTP " + res.status);
+      err.status = res.status;
+      throw err;
+    }
+    return data;
   }
 
   function setLang(lang) {
-    if (state.recording) return;
+    if (state.recording || state.sending) return;
     state.lang = lang;
     if (state.mode === "create") state.form.qlang = lang;
-    if (state.mode === "story") {
-      const url = new URL(location.href);
-      url.searchParams.set("lang", lang);
-      history.replaceState(null, "", url);
+    else {
+      try { localStorage.setItem("story-lang:" + token, lang); } catch (e) { /* storage blocked */ }
       state.index = Math.min(state.index, Q().length - 1);
     }
     state.notice = null;
@@ -100,6 +117,8 @@
     resetRecording();
     state.notice = null;
     state.screen = screen;
+    clearTimeout(state.pollId);
+    if (screen === "stories") loadStories();
     render();
     window.scrollTo(0, 0);
   }
@@ -109,8 +128,11 @@
     document.title = T().brand;
     app.replaceChildren(topbar());
     if (state.mode === "create") return renderCreate();
+    if (state.loading) return add(h("p", { class: "lead", text: T().loading }));
+    if (state.loadError) return add(h("div", { class: "notice bad", role: "alert", text: state.loadError }));
     if (state.screen === "welcome") return renderWelcome();
     if (state.screen === "done") return renderDone();
+    if (state.screen === "stories") return renderStories();
     return renderQuestion();
   }
 
@@ -127,7 +149,7 @@
         })));
   }
 
-  // ---------- Экран 1: ребёнок создаёт ссылку ----------
+  // ---------- Create links (for the family member) ----------
   function renderCreate() {
     const t = T();
     const fromInput = h("input", { id: "from", autocomplete: "given-name", placeholder: t.yourNamePh, maxlength: "40" });
@@ -142,113 +164,151 @@
     langSelect.value = state.form.qlang;
     langSelect.addEventListener("change", function () { state.form.qlang = langSelect.value; });
 
-    app.append(
+    add(
       h("h1", { text: t.createTitle }),
       h("p", { class: "lead", text: t.createLead }),
-      h("form", { class: "card", onsubmit: function (e) { e.preventDefault(); createLink(fromInput, nameInput); } },
+      h("form", { class: "card", onsubmit: function (e) { e.preventDefault(); createLinks(fromInput, nameInput); } },
         h("label", { for: "from" }, t.yourName, fromInput),
         h("label", { for: "name" }, t.theirName, nameInput),
         h("label", { for: "qlang" }, t.langLabel, langSelect),
-        h("button", { class: "btn btn-primary", type: "submit" }, t.createBtn)));
+        h("button", { class: "btn btn-primary", type: "submit", disabled: state.creating }, state.creating ? t.loading : t.createBtn)),
+      state.notice ? h("div", { class: "notice " + state.notice.kind, role: "status", text: state.notice.text }) : null);
 
-    if (state.createdLink) {
-      const linkUi = I18N[state.createdLang].ui;
-      const message = linkUi.shareMsg(state.form.name.trim()) + " " + state.createdLink;
-      app.append(h("section", { class: "card" },
-        h("h2", { text: t.linkReady }),
-        h("div", { class: "link-box", text: readableLink(state.createdLink) }),
-        h("a", { class: "btn btn-primary", href: "https://wa.me/?text=" + encodeURIComponent(message), target: "_blank", rel: "noopener" }, t.shareWa),
-        h("a", { class: "btn btn-secondary", href: "https://t.me/share/url?url=" + encodeURIComponent(state.createdLink) + "&text=" + encodeURIComponent(linkUi.shareMsg(state.form.name.trim())), target: "_blank", rel: "noopener" }, t.shareTg),
-        h("button", { class: "btn btn-quiet", type: "button", onclick: copyLink }, state.copied ? t.copied : t.copy)));
+    if (state.created) {
+      const linkUi = I18N[state.created.lang].ui;
+      const message = linkUi.shareMsg(state.created.name) + " " + state.created.tellerUrl;
+      add(
+        h("section", { class: "card" },
+          h("h2", { text: t.forTeller }),
+          h("p", { class: "small", text: t.forTellerNote }),
+          h("div", { class: "link-box", text: state.created.tellerUrl }),
+          h("a", { class: "btn btn-primary", href: "https://wa.me/?text=" + encodeURIComponent(message), target: "_blank", rel: "noopener" }, t.shareWa),
+          h("a", { class: "btn btn-secondary", href: "https://t.me/share/url?url=" + encodeURIComponent(state.created.tellerUrl) + "&text=" + encodeURIComponent(linkUi.shareMsg(state.created.name)), target: "_blank", rel: "noopener" }, t.shareTg),
+          h("button", { class: "btn btn-quiet", type: "button", onclick: function () { copyText(state.created.tellerUrl, "teller"); } }, state.copied === "teller" ? t.copied : t.copy)),
+        h("section", { class: "card" },
+          h("h2", { text: t.forFamily }),
+          h("p", { class: "small" }, icon(ICON_LOCK), " ", t.forFamilyNote),
+          h("div", { class: "link-box", text: state.created.familyUrl }),
+          h("a", { class: "btn btn-secondary", href: state.created.familyUrl, target: "_blank", rel: "noopener" }, t.openFamily),
+          h("button", { class: "btn btn-quiet", type: "button", onclick: function () { copyText(state.created.familyUrl, "family"); } }, state.copied === "family" ? t.copied : t.copy)));
     }
   }
 
-  function createLink(fromInput, nameInput) {
+  async function createLinks(fromInput, nameInput) {
     const from = state.form.from.trim();
     const name = state.form.name.trim();
     if (!from) { fromInput.focus(); return; }
     if (!name) { nameInput.focus(); return; }
-    const url = new URL(location.origin + location.pathname);
-    url.searchParams.set("name", name);
-    url.searchParams.set("from", from);
-    url.searchParams.set("lang", state.form.qlang);
-    state.createdLink = url.toString();
-    state.createdLang = state.form.qlang;
-    state.copied = false;
+    state.creating = true;
+    state.notice = null;
+    render();
+    try {
+      const data = await api("POST", "/api/create", { from: from, name: name, lang: state.form.qlang });
+      state.created = { tellerUrl: data.tellerUrl, familyUrl: data.familyUrl, lang: state.form.qlang, name: name };
+      state.copied = "";
+    } catch (e) {
+      state.notice = { kind: "bad", text: T().createFail };
+    }
+    state.creating = false;
     render();
   }
 
-  function readableLink(link) {
-    try { return decodeURI(link); } catch (e) { return link; }
-  }
-
-  async function copyLink() {
+  async function copyText(text, which) {
     try {
-      await navigator.clipboard.writeText(state.createdLink);
+      await navigator.clipboard.writeText(text);
     } catch (e) {
-      const ta = h("textarea", null, state.createdLink);
+      const ta = h("textarea", null, text);
       document.body.append(ta);
       ta.select();
-      try { document.execCommand("copy"); } catch (_) { /* ничего */ }
+      try { document.execCommand("copy"); } catch (_) { /* nothing */ }
       ta.remove();
     }
-    state.copied = true;
+    state.copied = which;
     render();
   }
 
-  // ---------- Экран 2: приветствие для рассказчика ----------
+  // ---------- Storyteller: load their profile ----------
+  async function loadProfile() {
+    try {
+      const data = await api("GET", "/api/teller?t=" + encodeURIComponent(token));
+      state.name = data.name;
+      state.from = data.from;
+      const chosen = savedLang();
+      state.lang = I18N[chosen] ? chosen : (I18N[data.lang] ? data.lang : state.lang);
+      state.answered = new Set(data.answered || []);
+      state.stories = data.stories || [];
+    } catch (e) {
+      state.loadError = e.status === 404 ? T().linkNotFound : T().loadFail;
+    }
+    state.loading = false;
+    render();
+  }
+
+  function firstOpen() {
+    const i = Q().findIndex(function (_, k) { return !state.answered.has(k); });
+    return i === -1 ? 0 : i;
+  }
+
+  function storiesButton() {
+    return h("button", { class: "btn btn-secondary", type: "button", onclick: function () { go("stories"); } }, T().myStories);
+  }
+
   function renderWelcome() {
     const t = T();
-    const started = Object.keys(loadProgress()).length > 0;
-    app.append(
+    add(
       h("h1", { text: t.welcomeTitle(state.name, state.from) }),
       h("p", { class: "lead", text: t.welcomeLead }),
+      h("p", { class: "privacy" }, icon(ICON_LOCK), h("span", { text: t.privacyNote })),
       h("p", { class: "tip", text: t.tip }),
       h("button", {
         class: "btn btn-primary",
         type: "button",
         onclick: function () { state.index = firstOpen(); go("question"); }
-      }, started ? t.cont : t.start));
+      }, state.answered.size ? t.cont : t.start),
+      state.stories.length ? storiesButton() : null);
   }
 
-  // ---------- Экран 3: вопрос и запись ----------
+  // ---------- Question and recording ----------
   function renderQuestion() {
     const t = T();
     const qs = Q();
     const i = state.index;
-    const p = loadProgress();
+    const busy = state.recording || state.sending;
 
     const dots = h("div", { class: "dots" }, qs.map(function (_, k) {
+      const done = state.answered.has(k);
       return h("button", {
         type: "button",
-        class: "dot" + (k === i ? " current" : p[k] ? " done" : ""),
-        "aria-label": t.questionOf(k + 1, qs.length) + (p[k] ? ", " + t.answered : ""),
+        class: "dot" + (k === i ? " current" : done ? " done" : ""),
+        "aria-label": t.questionOf(k + 1, qs.length) + (done ? ", " + t.answered : ""),
         "aria-current": k === i ? "step" : null,
-        disabled: state.recording,
+        disabled: busy,
         onclick: function () { state.index = k; go("question"); }
       }, String(k + 1));
     }));
 
-    app.append(h("section", { class: "card" },
+    add(h("section", { class: "card" },
       h("div", { class: "progress" }, h("span", { text: t.questionOf(i + 1, qs.length) }), dots),
       h("p", { class: "question", text: qs[i] }),
-      h("button", { class: "btn btn-secondary", type: "button", onclick: speakQuestion, disabled: state.recording }, icon(ICON_SPEAKER), t.listen),
+      h("button", { class: "btn btn-secondary", type: "button", onclick: speakQuestion, disabled: busy }, icon(ICON_SPEAKER), t.listen),
       (!state.blob || state.recording) ? recorderBlock() : null,
       state.notice ? h("div", { class: "notice " + state.notice.kind, role: "status", text: state.notice.text }) : null,
       (state.blob && !state.recording) ? answerBlock() : null));
 
     const last = i === qs.length - 1;
-    app.append(h("div", { class: "row" },
+    const done = state.answered.has(i);
+    add(h("div", { class: "row" },
       h("button", {
         class: "btn btn-quiet", type: "button",
-        disabled: i === 0 || state.recording,
+        disabled: i === 0 || busy,
         onclick: function () { state.index = i - 1; go("question"); }
       }, t.back),
       h("button", {
-        class: "btn " + (p[i] ? "btn-secondary" : "btn-quiet"), type: "button",
-        disabled: state.recording,
+        class: "btn " + (done ? "btn-secondary" : "btn-quiet"), type: "button",
+        disabled: busy,
         onclick: function () { if (last) go("done"); else { state.index = i + 1; go("question"); } }
-      }, p[i] ? t.next : t.skip)));
+      }, done ? t.next : t.skip)));
+    if (state.answered.size) add(h("button", { class: "btn btn-quiet", type: "button", disabled: busy, onclick: function () { go("stories"); } }, t.myStories));
   }
 
   function recorderBlock() {
@@ -267,37 +327,97 @@
 
   function answerBlock() {
     const t = T();
-    const chip = function (value, label) {
-      return h("button", {
-        type: "button", class: "chip", "aria-pressed": String(state.privacy === value),
-        onclick: function () { state.privacy = value; render(); }
-      }, label);
-    };
     return h("div", { class: "answer" },
       h("p", { class: "small", text: t.yourAnswer }),
       h("audio", { controls: true, preload: "metadata", src: state.blobUrl }),
-      h("p", { class: "small", text: t.privacyLabel }),
-      h("div", { class: "chips" }, chip("now", t.privacyNow), chip("later", t.privacyLater)),
-      h("button", { class: "btn btn-primary", type: "button", onclick: sendAnswer }, t.send),
+      h("p", { class: "privacy" }, icon(ICON_LOCK), h("span", { text: t.privacyNote })),
+      h("button", { class: "btn btn-primary", type: "button", onclick: sendAnswer, disabled: state.sending }, state.sending ? t.sending : t.send),
       h("button", {
-        class: "btn btn-secondary", type: "button",
+        class: "btn btn-secondary", type: "button", disabled: state.sending,
         onclick: function () { resetRecording(); state.notice = null; render(); }
       }, t.rerecord));
   }
 
-  // ---------- Экран 4: спасибо ----------
   function renderDone() {
     const t = T();
-    app.append(
+    add(
       h("h1", { text: t.doneTitle }),
       h("p", { class: "lead", text: t.doneLead }),
+      storiesButton(),
       h("button", {
-        class: "btn btn-secondary", type: "button",
+        class: "btn btn-quiet", type: "button",
         onclick: function () { state.index = firstOpen(); go("question"); }
       }, t.allQuestions));
   }
 
-  // ---------- Запись звука ----------
+  // ---------- My stories: read and approve ----------
+  async function loadStories() {
+    try {
+      const data = await api("GET", "/api/teller?t=" + encodeURIComponent(token));
+      state.stories = data.stories || [];
+      state.answered = new Set(data.answered || []);
+    } catch (e) { /* keep what we have */ }
+    if (state.screen !== "stories") return;
+    render();
+    clearTimeout(state.pollId);
+    const writing = state.stories.some(function (s) { return s.status === "uploaded" || s.status === "processing"; });
+    if (writing) state.pollId = setTimeout(loadStories, 8000);
+  }
+
+  function renderStories() {
+    const t = T();
+    add(h("h1", { text: t.myStories }), h("p", { class: "lead", text: t.myStoriesLead }));
+    if (!state.stories.length) add(h("p", { class: "small", text: t.noStories }));
+    state.stories.slice().reverse().forEach(function (s) {
+      const body = [];
+      if (s.status === "ready") {
+        body.push(h("h2", { text: s.title || s.question }));
+        body.push(h("p", { class: "story-text", text: s.story || "" }));
+        body.push(h("div", { class: "chips" },
+          h("button", { type: "button", class: "chip", "aria-pressed": String(s.approval === "approved"), onclick: function () { setApproval(s, "approved"); } }, t.approve),
+          h("button", { type: "button", class: "chip", "aria-pressed": String(s.approval === "hidden"), onclick: function () { setApproval(s, "hidden"); } }, t.hide)));
+        if (s.approval === "approved") body.push(h("p", { class: "small", text: t.approvedNote }));
+        if (s.approval === "hidden") body.push(h("p", { class: "small", text: t.hiddenNote }));
+      } else if (s.status === "failed") {
+        body.push(h("p", { class: "small", text: t.statusFailed }));
+      } else {
+        body.push(h("p", { class: "small writing", text: t.statusWriting }));
+      }
+      add(h("article", { class: "card story" },
+        h("p", { class: "small", text: s.question }),
+        body,
+        h("button", { class: "btn btn-quiet danger", type: "button", onclick: function () { deleteStory(s); } }, t.deleteRec)));
+    });
+    add(h("button", {
+      class: "btn btn-primary", type: "button",
+      onclick: function () { state.index = firstOpen(); go("question"); }
+    }, t.allQuestions));
+  }
+
+  async function setApproval(story, approval) {
+    const previous = story.approval;
+    story.approval = approval;
+    render();
+    try {
+      await api("POST", "/api/teller", { t: token, action: "approve", answerId: story.id, approval: approval });
+    } catch (e) {
+      story.approval = previous;
+      render();
+    }
+  }
+
+  async function deleteStory(story) {
+    if (!window.confirm(T().confirmDelete)) return;
+    try {
+      await api("POST", "/api/teller", { t: token, action: "delete", answerId: story.id });
+      state.stories = state.stories.filter(function (s) { return s.id !== story.id; });
+      const stillAnswered = state.stories.some(function (s) { return s.questionIndex === story.questionIndex && s.status !== "failed"; });
+      if (!stillAnswered) state.answered.delete(story.questionIndex);
+      render();
+    } catch (e) { /* leave as is */ }
+  }
+
+  // ---------- Recording ----------
   function pickMime() {
     if (!window.MediaRecorder || typeof MediaRecorder.isTypeSupported !== "function") return "";
     const options = ["audio/mp4", "audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus"];
@@ -333,6 +453,7 @@
     rec.onstop = function () {
       const type = (rec.mimeType || mime || "audio/webm").split(";")[0];
       state.blob = new Blob(state.chunks, { type: type });
+      state.durationSec = (Date.now() - state.startedAt) / 1000;
       if (state.blobUrl) URL.revokeObjectURL(state.blobUrl);
       state.blobUrl = URL.createObjectURL(state.blob);
       stopStream();
@@ -375,7 +496,7 @@
     state.blob = null;
     state.blobUrl = "";
     state.chunks = [];
-    state.privacy = "now";
+    state.durationSec = 0;
   }
 
   function fmt(ms) {
@@ -383,56 +504,39 @@
     return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
   }
 
-  // ---------- Отправка ----------
-  function extFor(type) {
-    if (type.indexOf("mp4") !== -1 || type.indexOf("m4a") !== -1) return "m4a";
-    if (type.indexOf("ogg") !== -1) return "ogg";
-    return "webm";
-  }
-
-  function fileName() {
-    const safe = function (s) {
-      return (s || "").replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-+|-+$/g, "") || "story";
-    };
-    const day = new Date().toISOString().slice(0, 10);
-    const n = String(state.index + 1).padStart(2, "0");
-    return safe(state.name) + "_q" + n + "_" + state.privacy + "_" + day + "." + extFor(state.blob.type);
-  }
-
+  // ---------- Private upload ----------
   async function sendAnswer() {
     const t = T();
-    const i = state.index;
-    const file = new File([state.blob], fileName(), { type: state.blob.type });
-    let shared = false;
-    if (navigator.canShare && navigator.canShare({ files: [file] })) {
-      try {
-        await navigator.share({ files: [file], title: t.answerFile(i + 1, Q()[i]) });
-        shared = true;
-      } catch (e) {
-        if (e && e.name === "AbortError") return; // человек закрыл меню
-      }
+    const index = state.index;
+    const blob = state.blob;
+    const type = blob.type || "audio/webm";
+    state.sending = true;
+    state.notice = null;
+    render();
+    try {
+      const slot = await api("POST", "/api/teller", {
+        t: token, action: "upload-url", questionIndex: index, questionText: Q()[index], mime: type
+      });
+      const put = await fetch(slot.uploadUrl, {
+        method: "PUT",
+        headers: { "content-type": type, "x-upsert": "false" },
+        body: blob
+      });
+      if (!put.ok) throw new Error("Upload failed: " + put.status);
+      await api("POST", "/api/teller", { t: token, action: "uploaded", answerId: slot.answerId, durationSec: state.durationSec });
+      state.answered.add(index);
+      state.stories.push({ id: slot.answerId, questionIndex: index, question: Q()[index], status: "uploaded", approval: "waiting" });
+      state.sending = false;
+      resetRecording();
+      state.notice = { kind: "good", text: t.saved };
+    } catch (e) {
+      state.sending = false;
+      state.notice = { kind: "bad", text: t.sendFail };
     }
-    if (shared) {
-      state.notice = { kind: "good", text: t.sentOk };
-    } else {
-      download(file);
-      state.notice = { kind: "good", text: t.downloaded };
-    }
-    const p = loadProgress();
-    p[i] = { privacy: state.privacy, at: Date.now() };
-    saveProgress(p);
     render();
   }
 
-  function download(file) {
-    const url = URL.createObjectURL(file);
-    const a = h("a", { href: url, download: file.name });
-    document.body.append(a);
-    a.click();
-    setTimeout(function () { URL.revokeObjectURL(url); a.remove(); }, 2000);
-  }
-
-  // ---------- Озвучка вопроса ----------
+  // ---------- Read the question aloud ----------
   function speakQuestion() {
     const t = T();
     if (!("speechSynthesis" in window)) {
@@ -458,8 +562,9 @@
   if ("speechSynthesis" in window) speechSynthesis.getVoices();
 
   window.addEventListener("beforeunload", function (e) {
-    if (state.recording) { e.preventDefault(); e.returnValue = ""; }
+    if (state.recording || state.sending) { e.preventDefault(); e.returnValue = ""; }
   });
 
   render();
+  if (state.mode === "story") loadProfile();
 })();
