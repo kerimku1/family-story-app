@@ -150,3 +150,31 @@ audio { width: 100%; }
 .media-item h2 { font-size: 20px; padding: 14px 16px; }
 .empty { text-align: center; padding: 32px 20px; }
 .empty .icon svg { width: 44px; height: 44px; color: var(--accent); }
+
+/* Voice choice in My stories */
+.voice-choice { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--line); padding-top: 12px; }
+
+/* Comic on the family page: pictures from the artist, captions from the app */
+.comic { gap: 14px; }
+.comic-head { display: flex; flex-direction: column; gap: 8px; }
+.comic-head h2 { font-size: 24px; }
+.listen-all .icon svg { width: 20px; height: 20px; }
+.panels { display: flex; flex-direction: column; gap: 14px; }
+.panel-frame {
+  margin: 0; border: 3px solid var(--ink); border-radius: 6px; overflow: hidden; background: var(--card);
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
+}
+.panel-frame img { display: block; width: 100%; height: auto; background: var(--line); }
+.panel-frame.playing { box-shadow: 0 0 0 4px var(--accent); }
+@media (prefers-reduced-motion: no-preference) { .panel-frame.playing { transform: scale(1.01); } }
+.caption-box {
+  display: flex; align-items: center; gap: 12px; padding: 12px 14px;
+  border-top: 3px solid var(--ink); background: #fffbea; color: #2b2420;
+}
+.caption-text { flex: 1; font-size: 19px; line-height: 1.35; font-weight: 600; }
+.voice-btn {
+  flex: none; display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: 15px; font-weight: 600;
+  border: 2px solid #2b2420; border-radius: 999px; padding: 8px 12px; background: #ffffff; color: #2b2420; cursor: pointer; min-height: 44px;
+}
+.voice-btn .icon svg { width: 18px; height: 18px; }
+.panel-frame.playing .voice-btn { background: var(--accent); border-color: var(--accent); color: #ffffff; }

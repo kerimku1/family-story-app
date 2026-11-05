@@ -137,3 +137,106 @@ test("typed answer: no transcription, story written from the text", async () => 
     server.close();
   }
 });
+
+test("comic panels: voice clip only when allowed, gone when voice is off or story hidden", async () => {
+  const { execFileSync } = await import("node:child_process");
+  const ffmpeg = (await import("ffmpeg-static")).default;
+  // 10 seconds of real Opus audio, like a phone recording.
+  const audio = execFileSync(ffmpeg, ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=330:duration=10", "-c:a", "libopus", "-f", "webm", "pipe:1"], { maxBuffer: 1 << 24 });
+
+  const { server, store, url } = await startTestServer(8797);
+  try {
+    const post = (path, body, headers = {}) => fetch(url + path, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) }).then(async (r) => ({ status: r.status, body: await r.json() }));
+    const auth = { authorization: "Bearer " + process.env.STUDIO_PASSWORD };
+    const waitFor = async (check) => { for (let i = 0; i < 150 && !(await check()); i++) await new Promise((r) => setTimeout(r, 40)); };
+
+    const created = await post("/api/create", { from: "Мухамед", name: "Мама", lang: "ru" });
+    const t = new URL(created.body.tellerUrl).searchParams.get("t");
+    const f = new URL(created.body.familyUrl).searchParams.get("f");
+    const slot = await post("/api/teller", { t, action: "upload-url", questionIndex: 0, questionText: "Где вы родились?", mime: "audio/webm" });
+    await fetch(slot.body.uploadUrl, { method: "PUT", headers: { "content-type": "audio/webm" }, body: audio });
+    await post("/api/teller", { t, action: "uploaded", answerId: slot.body.answerId, durationSec: 10 });
+    const id = slot.body.answerId;
+    await waitFor(() => store.db.answers[0].status === "ready");
+    assert.equal(store.db.answers[0].status, "ready", store.db.answers[0].error || "");
+
+    // Approved, voice not allowed yet: no clips.
+    await post("/api/teller", { t, action: "approve", answerId: id, approval: "approved" });
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(store.db.answers[0].comic_script.panels.some((p) => p.clip_path), false);
+
+    // Studio uploads both panels, then publishes the comic.
+    const teller = store.db.storytellers[0];
+    for (const i of [0, 1]) {
+      const m = await post("/api/studio", { action: "media-upload-url", storytellerId: teller.id, answerId: id, kind: "panel", panelIndex: i, mime: "image/png" }, auth);
+      assert.equal(m.status, 200, JSON.stringify(m.body));
+      await fetch(m.body.uploadUrl, { method: "PUT", headers: { "content-type": "image/png" }, body: new Uint8Array([137, 80, 78, 71, i]) });
+      await post("/api/studio", { action: "media-publish", mediaId: m.body.mediaId }, auth);
+    }
+    assert.equal((await post("/api/studio", { action: "media-upload-url", storytellerId: teller.id, answerId: id, kind: "panel", panelIndex: 9, mime: "image/png" }, auth)).status, 400);
+    let fam = await (await fetch(`${url}/api/family?f=${f}`)).json();
+    assert.deepEqual(fam.comics, [], "draft panels are not shown");
+    assert.equal((await post("/api/studio", { action: "comic-publish", answerId: id, publish: true }, auth)).status, 200);
+
+    fam = await (await fetch(`${url}/api/family?f=${f}`)).json();
+    assert.equal(fam.comics.length, 1);
+    assert.equal(fam.comics[0].panels.length, 2);
+    assert.equal(fam.comics[0].panels[0].caption, "Дом у реки");
+    assert.equal(fam.comics[0].panels[0].clipUrl, null, "no voice until the storyteller allows it");
+
+    // Replacing panel 1 keeps exactly one image for it, still published.
+    const r = await post("/api/studio", { action: "media-upload-url", storytellerId: teller.id, answerId: id, kind: "panel", panelIndex: 0, mime: "image/png" }, auth);
+    await fetch(r.body.uploadUrl, { method: "PUT", headers: { "content-type": "image/png" }, body: new Uint8Array([9]) });
+    await post("/api/studio", { action: "media-publish", mediaId: r.body.mediaId }, auth);
+    assert.equal(store.db.media.filter((m) => m.panel_index === 0).length, 1);
+    assert.equal(store.db.media.find((m) => m.panel_index === 0).status, "published");
+
+    // Storyteller allows voice → clips are cut.
+    await post("/api/teller", { t, action: "voice", answerId: id, allow: true });
+    await waitFor(() => store.db.answers[0].comic_script.panels.every((p) => p.clip_path));
+    const panels = store.db.answers[0].comic_script.panels;
+    assert.ok(panels.every((p) => p.clip_path), "both panels get a clip");
+    const clip = store.files.get("media/" + panels[0].clip_path);
+    assert.equal(clip.type, "audio/mp4");
+    assert.ok(clip.data.length > 500, "clip has audio");
+    // The clip is a real, playable file of about the quoted sentence's length.
+    const { writeFileSync, mkdtempSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { tmpdir } = await import("node:os");
+    const tmp = join(mkdtempSync(join(tmpdir(), "cliptest-")), "c.m4a");
+    writeFileSync(tmp, clip.data);
+    let info = "";
+    try { execFileSync(ffmpeg, ["-hide_banner", "-i", tmp], { stdio: "pipe" }); } catch (e) { info = String(e.stderr); }
+    const dur = info.match(/Duration: 00:00:(\d+\.\d+)/);
+    assert.ok(dur && Number(dur[1]) > 2 && Number(dur[1]) < 5, "clip length " + (dur && dur[1]));
+
+    fam = await (await fetch(`${url}/api/family?f=${f}`)).json();
+    assert.ok(fam.comics[0].panels[0].clipUrl, "family hears the allowed clip");
+    assert.equal(JSON.stringify(fam).includes("recordings/"), false, "full recording is never shared");
+
+    const studio = await (await fetch(`${url}/api/studio`, { headers: auth })).json();
+    assert.equal(JSON.stringify(studio).includes("clip_path"), false);
+
+    // Voice off → clips deleted.
+    await post("/api/teller", { t, action: "voice", answerId: id, allow: false });
+    await waitFor(() => !store.db.answers[0].comic_script.panels.some((p) => p.clip_path));
+    assert.equal([...store.files.keys()].some((k) => k.includes("/clips/")), false);
+    fam = await (await fetch(`${url}/api/family?f=${f}`)).json();
+    assert.equal(fam.comics[0].panels[0].clipUrl, null);
+
+    // Story hidden → comic disappears from the family page.
+    await post("/api/teller", { t, action: "approve", answerId: id, approval: "hidden" });
+    fam = await (await fetch(`${url}/api/family?f=${f}`)).json();
+    assert.deepEqual(fam.comics, []);
+
+    // Typed answers can't turn voice on.
+    const typed = await post("/api/teller", { t, action: "text-answer", questionIndex: 1, questionText: "Q2", text: "Текст" });
+    assert.equal((await post("/api/teller", { t, action: "voice", answerId: typed.body.answerId, allow: true })).status, 400);
+
+    // Deleting removes panels too.
+    await post("/api/teller", { t, action: "delete", answerId: id });
+    assert.equal(store.db.media.filter((m) => m.answer_id === id).length, 0);
+  } finally {
+    server.close();
+  }
+});

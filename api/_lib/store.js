@@ -81,6 +81,11 @@ function supabaseStore() {
     async createMedia(row) {
       return must(await db.from("media").insert(row).select().single(), "create media");
     },
+    async listMediaForAnswer(answerId) {
+      return must(
+        await db.from("media").select("*").eq("answer_id", answerId).order("created_at", { ascending: true }),
+        "list media for answer");
+    },
     async mediaById(id) {
       return must(await db.from("media").select("*").eq("id", id).maybeSingle(), "find media");
     },
@@ -103,6 +108,9 @@ function supabaseStore() {
     },
     async download(bucket, path) {
       return must(await db.storage.from(bucket).download(path), "download");
+    },
+    async upload(bucket, path, data, contentType) {
+      must(await db.storage.from(bucket).upload(path, data, { contentType, upsert: true }), "upload");
     },
     async signedUrl(bucket, path, seconds) {
       const data = must(await db.storage.from(bucket).createSignedUrl(path, seconds), "signed url");

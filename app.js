@@ -462,6 +462,14 @@
           h("button", { type: "button", class: "chip", "aria-pressed": String(s.approval === "hidden"), onclick: function () { setApproval(s, "hidden"); } }, t.hide)));
         if (s.approval === "approved") body.push(h("p", { class: "small", text: t.approvedNote }));
         if (s.approval === "hidden") body.push(h("p", { class: "small", text: t.hiddenNote }));
+        if (s.approval === "approved" && !s.typed) {
+          body.push(h("div", { class: "voice-choice" },
+            h("p", { class: "small", text: t.voiceLabel }),
+            h("div", { class: "chips" },
+              h("button", { type: "button", class: "chip", "aria-pressed": String(Boolean(s.allowVoice)), onclick: function () { setVoice(s, true); } }, t.voiceWith),
+              h("button", { type: "button", class: "chip", "aria-pressed": String(!s.allowVoice), onclick: function () { setVoice(s, false); } }, t.voiceWithout)),
+            h("p", { class: "small", text: s.allowVoice ? t.voiceOnNote : t.voiceOffNote })));
+        }
       } else if (s.status === "failed") {
         body.push(h("p", { class: "small", text: t.statusFailed }));
       } else {
@@ -476,6 +484,18 @@
       class: "btn btn-primary", type: "button",
       onclick: function () { state.index = firstOpen(); go("question"); }
     }, t.allQuestions));
+  }
+
+  async function setVoice(story, allow) {
+    const previous = story.allowVoice;
+    story.allowVoice = allow;
+    render();
+    try {
+      await api("POST", "/api/teller", { t: token, action: "voice", answerId: story.id, allow: allow });
+    } catch (e) {
+      story.allowVoice = previous;
+      render();
+    }
   }
 
   async function setApproval(story, approval) {

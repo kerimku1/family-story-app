@@ -4,10 +4,12 @@
 // POST { t, action: "uploaded", answerId, durationSec }               → starts transcription + writing
 // POST { t, action: "text-answer", questionIndex, questionText, text } → typed answer, starts writing
 // POST { t, action: "approve", answerId, approval: "approved"|"hidden" }
-// POST { t, action: "delete", answerId }                               → deletes the recording and story
+// POST { t, action: "voice", answerId, allow: true|false }             → may short voice clips play in the comic?
+// POST { t, action: "delete", answerId }                               → deletes the recording, story, clips and panels
 import { getStore } from "./_lib/store.js";
 import { send, fail, readJson, query, cleanText, extFor, inBackground } from "./_lib/http.js";
 import { processAnswer } from "./_lib/pipeline.js";
+import { syncClips, clipPaths } from "./_lib/clips.js";
 
 export const config = { maxDuration: 300 };
 
@@ -29,6 +31,8 @@ export function tellerView(teller, answers) {
         title: a.status === "ready" ? a.title : null,
         story: a.status === "ready" ? a.story : null,
         approval: a.approval,
+        allowVoice: Boolean(a.allow_voice),
+        typed: !a.audio_path,
         createdAt: a.created_at
       }))
   };
@@ -103,11 +107,22 @@ export default async function handler(req, res) {
     if (body.action === "approve") {
       if (!["approved", "hidden"].includes(body.approval)) return fail(res, 400, "Bad approval");
       await store.updateAnswer(answer.id, { approval: body.approval });
+      await inBackground(syncClips(store, answer.id));
+      return send(res, 200, { ok: true });
+    }
+
+    if (body.action === "voice") {
+      if (!answer.audio_path) return fail(res, 400, "This answer was typed, there is no voice");
+      await store.updateAnswer(answer.id, { allow_voice: body.allow === true });
+      await inBackground(syncClips(store, answer.id));
       return send(res, 200, { ok: true });
     }
 
     if (body.action === "delete") {
       if (answer.audio_path) await store.remove("recordings", [answer.audio_path]);
+      const media = await store.listMediaForAnswer(answer.id);
+      await store.remove("media", [...clipPaths(answer), ...media.map((m) => m.path).filter((p) => p && p !== "pending")]);
+      for (const m of media) await store.deleteMedia(m.id);
       await store.deleteAnswer(answer.id);
       return send(res, 200, { ok: true });
     }

@@ -1,4 +1,4 @@
--- Family Story: database and private storage.
+-- Family Story: database and private storage (includes update 002).
 -- Run once in Supabase: Dashboard → SQL Editor → New query → paste → Run.
 
 create extension if not exists pgcrypto;
@@ -34,6 +34,7 @@ create table if not exists answers (
   comic_script jsonb,                    -- characters + panels for the comic / animation
   follow_up_questions jsonb,
   approval text not null default 'waiting', -- waiting | approved | hidden
+  allow_voice boolean not null default false, -- storyteller allows short voice clips in the comic
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -44,7 +45,8 @@ create table if not exists media (
   id uuid primary key default gen_random_uuid(),
   storyteller_id uuid not null references storytellers(id) on delete cascade,
   answer_id uuid references answers(id) on delete set null,
-  kind text not null check (kind in ('comic', 'video')),
+  kind text not null check (kind in ('comic', 'video', 'panel')),
+  panel_index int,                       -- for kind = 'panel': which comic panel this image is
   title text,
   path text not null,                    -- path in the private "media" bucket
   mime text,
@@ -52,6 +54,7 @@ create table if not exists media (
   created_at timestamptz not null default now()
 );
 create index if not exists media_storyteller_idx on media (storyteller_id, created_at);
+create index if not exists media_answer_idx on media (answer_id, panel_index);
 
 -- Row Level Security on, with no policies: browsers can never read these tables
 -- directly. Only the server, using the secret key, can.

@@ -1,6 +1,7 @@
 // What happens after an answer is uploaded:
 // audio → transcript with word timings → story + details + comic script → life card.
 import { transcribe, writeStory } from "./ai.js";
+import { syncClips, clipPaths } from "./clips.js";
 
 const CARD_KEYS = ["people", "places", "times", "objects", "phrases", "traits", "appearance"];
 
@@ -87,6 +88,7 @@ export async function processAnswer(store, answerId, { fetchImpl = fetch } = {})
     }, { fetchImpl });
 
     const panels = (written.comic?.panels || []).map((p) => ({ ...p, voice_clip: findClip(heard.words, p.quote) }));
+    const oldClips = clipPaths(answer);
     await store.updateAnswer(answerId, {
       status: "ready",
       title: written.title,
@@ -99,6 +101,9 @@ export async function processAnswer(store, answerId, { fetchImpl = fetch } = {})
     // Re-read the storyteller so two answers finishing together don't overwrite each other's details.
     const fresh = await store.storytellerById(teller.id);
     await store.updateStoryteller(teller.id, { life_card: mergeLifeCard(fresh.life_card, written.details) });
+
+    if (oldClips.length) await store.remove("media", oldClips);
+    await syncClips(store, answerId);
   } catch (err) {
     console.error("processAnswer failed", answerId, err);
     await store.updateAnswer(answerId, { status: "failed", error: String(err.message || err).slice(0, 500) });

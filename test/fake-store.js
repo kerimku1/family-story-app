@@ -32,13 +32,14 @@ export function createFakeStore(baseUrl = "http://localhost") {
     async listStorytellers() { return clone([...db.storytellers].reverse()); },
     async updateStoryteller(id, patch) { return update("storytellers", id, patch); },
 
-    async createAnswer(row) { return insert("answers", { approval: "waiting", ...row }); },
+    async createAnswer(row) { return insert("answers", { approval: "waiting", allow_voice: false, ...row }); },
     async answerById(id) { return clone(db.answers.find((r) => r.id === id)); },
     async listAnswers(sid) { return clone(db.answers.filter((r) => r.storyteller_id === sid).sort(byCreated)); },
     async updateAnswer(id, patch) { return update("answers", id, patch); },
     async deleteAnswer(id) { remove("answers", id); },
 
     async createMedia(row) { return insert("media", row); },
+    async listMediaForAnswer(aid) { return clone(db.media.filter((r) => r.answer_id === aid).sort(byCreated)); },
     async mediaById(id) { return clone(db.media.find((r) => r.id === id)); },
     async listMedia(sid) { return clone(db.media.filter((r) => r.storyteller_id === sid).sort(byCreated)); },
     async updateMedia(id, patch) { return update("media", id, patch); },
@@ -50,6 +51,7 @@ export function createFakeStore(baseUrl = "http://localhost") {
       if (!f) throw new Error("file not found: " + path);
       return new Blob([f.data], { type: f.type });
     },
+    async upload(bucket, path, data, contentType) { files.set(`${bucket}/${path}`, { data: Buffer.from(data), type: contentType }); },
     async signedUrl(bucket, path) { return `${baseUrl}/__file/${bucket}/${encodeURIComponent(path)}`; },
     async remove(bucket, paths) { for (const p of paths) files.delete(`${bucket}/${p}`); }
   };

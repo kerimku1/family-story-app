@@ -26,3 +26,5 @@
 .studio .thumb div { padding: 6px 8px; display: flex; justify-content: space-between; gap: 6px; align-items: center; }
 .studio pre { white-space: pre-wrap; font-size: 13px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px; margin: 0; }
 .studio summary > .toolbar { display: inline-flex; vertical-align: middle; }
+.studio .panel-thumb { width: 100%; border-radius: 8px; border: 1px solid var(--line); display: block; }
+.studio .panel input[type=file] { font-size: 13px; }

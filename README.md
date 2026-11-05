@@ -39,6 +39,7 @@ creates links  ───────►  opens link, answers by voice
 | `api/family.js` | Family page data (finished media only) |
 | `api/studio.js` | Studio data and media uploads (password-protected) |
 | `api/_lib/pipeline.js` | Transcribe → write story → comic script → life card |
+| `api/_lib/clips.js` | Cuts one-sentence voice clips for panels (only when the storyteller allows it) |
 | `api/_lib/ai.js` | ElevenLabs Scribe and Claude calls, and the prompt |
 | `supabase/schema.sql` | Database tables and private storage buckets |
 | `test/` | Tests and a local test server with fake storage and fake AI |
@@ -50,7 +51,8 @@ You need four accounts. Supabase and Vercel have free plans; ElevenLabs and Anth
 ### 1. Supabase — database and private file storage
 
 1. Go to supabase.com, sign up, and click **New project**. Choose a region close to your users and save the database password somewhere safe.
-2. When the project is ready, open **SQL Editor → New query**. Paste everything from `supabase/schema.sql` and click **Run**. You should see "Success".
+2. When the project is ready, open **SQL Editor → New snippet**. Paste everything from `supabase/schema.sql` and click **Run**. You should see "Success".
+   - **Already set up before?** Run `supabase/002_panels_and_voice.sql` the same way instead (it only adds the new fields).
 3. Open **Project Settings → API Keys** (or **API**). Copy:
    - the **Project URL** → this is `SUPABASE_URL`
    - the **secret** key (older projects call it **service_role**) → this is `SUPABASE_SECRET_KEY`. Keep it secret; never put it in browser code.
@@ -87,14 +89,23 @@ If a story shows "couldn't process", open the studio: the error message says whi
 
 The GitHub Pages copy can't save answers (it has no server). On GitHub: **Settings → Pages → Unpublish site**.
 
-## Making comics and films (for now, in the studio)
+## Making comics (in the studio)
 
-1. In the studio, open an approved story and click **Copy brief for image AI**. The brief lists the characters, era, and each panel.
-2. Paste it into an image generator, adjust until the characters look right, and export the page.
-3. For a film: animate the panels with a video tool and use the **voice clip timings** shown under each panel to cut the storyteller's real voice for narration (the clip shows where that sentence was spoken in the recording).
-4. Upload the result under that story with a title. It appears on the family page right away.
+A comic is a set of panels. The image AI draws only pictures; **the app adds the captions**, so they are always spelled right, in Kazakh, Russian or English.
 
-The next version can automate these steps.
+1. In the studio, open an approved story. Optionally click **Copy prompt for a character sheet** first and generate it, so faces stay the same in every panel.
+2. For each panel, click **Copy prompt for this panel**, paste it into Gemini (attach a photo of the person and the character sheet), and download the image.
+3. Under that panel, choose the file and click **Upload image**. Use **Replace image** to swap one later.
+4. Click **Publish comic to family**. It appears on the family page panel by panel, with captions.
+
+### The real voice
+
+In **My stories**, the storyteller chooses **With my voice / Without voice** for each approved story (off by default).
+- If allowed, the server cuts one short clip per panel — just the sentence quoted for that panel — and the family can tap **Voice** on a panel or **Listen to the story** to play them all in order.
+- If not allowed (or the story is hidden), the clips are deleted and the family sees pictures and captions only.
+- The full recording is never sent to the family or the studio.
+
+Typed answers have no voice, so their comics are pictures and captions only.
 
 ## Privacy
 

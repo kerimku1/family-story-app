@@ -113,9 +113,11 @@
 
   function renderAnswer(t, a) {
     const media = t.media.filter(function (m) { return m.answerId === a.id; });
+    const panelMedia = media.filter(function (m) { return m.kind === "panel"; });
+    const otherMedia = media.filter(function (m) { return m.kind !== "panel"; });
     const head = h("div", { class: "toolbar" },
       h("h3", { text: "Q" + (a.questionIndex + 1) + ". " + (a.title || a.question) }),
-      badge(a.status), badge(a.approval), a.typed ? badge("typed") : null,
+      badge(a.status), badge(a.approval), a.typed ? badge("typed") : (a.allowVoice ? badge("voice allowed") : badge("no voice")),
       a.durationSec ? h("span", { class: "meta", text: a.durationSec + "s" }) : null,
       (a.status === "failed" || a.status === "ready") ? h("button", { class: "btn btn-quiet", type: "button", disabled: busy === a.id, onclick: function () { retry(a); } }, a.status === "failed" ? "Retry" : "Rewrite") : null);
     const parts = [head];
@@ -125,55 +127,97 @@
       return h("details", null, h("summary", null, head), parts.slice(1));
     }
     parts.push(h("details", null, h("summary", null, "Story"), h("p", { class: "story-text", text: a.story || "" })));
-    if (a.comicScript) parts.push(comicScript(a));
-    parts.push(mediaBlock(t, a, media, "Comic pages / film for this story"));
+    if (a.comicScript) parts.push(comicScript(t, a, panelMedia));
+    parts.push(mediaBlock(t, a, otherMedia, "Optional: a finished film or one-page comic for this story"));
     return h("div", { class: "card", style: "margin-top:12px" }, parts);
   }
 
-  function comicScript(a) {
+  function voiceLine(a, p) {
+    if (a.typed) return "Typed answer: no voice";
+    if (!p.voice_clip) return "Voice: sentence not found in the recording";
+    const when = p.voice_clip.start.toFixed(1) + "–" + p.voice_clip.end.toFixed(1) + "s";
+    if (!a.allowVoice) return "Voice " + when + " · storyteller has not allowed voice";
+    return p.hasClip ? "Voice clip ready (" + when + ")" : "Voice " + when + " · clip is being cut…";
+  }
+
+  function comicScript(t, a, panelMedia) {
     const c = a.comicScript;
-    const brief = briefFor(a);
-    return h("details", { open: true }, h("summary", null, "Comic script"),
+    const panels = c.panels || [];
+    const uploaded = panelMedia.filter(function (m) { return m.status === "draft" || m.status === "published"; });
+    const live = uploaded.some(function (m) { return m.status === "published"; });
+    return h("details", { open: true }, h("summary", null, "Comic: " + uploaded.length + " of " + panels.length + " panels" + (live ? " · on family page" : "")),
+      h("p", { class: "meta", text: "Ask the image AI for each panel without any text. The app adds the captions itself, so they are always spelled right." }),
       h("p", { class: "meta", text: c.style_notes || "" }),
       c.characters && c.characters.length ? h("div", { class: "grid" }, c.characters.map(function (ch) {
         return h("div", { class: "panel" }, h("b", { text: "Character" }), h("span", { text: ch.name }), h("span", { class: "meta", text: ch.look }));
       })) : null,
-      h("div", { class: "grid", style: "margin-top:12px" }, (c.panels || []).map(function (p, i) {
-        const clip = a.typed ? "Typed answer: no voice clip" : p.voice_clip ? "Voice clip " + p.voice_clip.start.toFixed(1) + "–" + p.voice_clip.end.toFixed(1) + "s" : "Voice clip: not found in transcript";
+      h("div", { class: "grid", style: "margin-top:12px" }, panels.map(function (p, i) {
+        const image = panelMedia.filter(function (m) { return m.panelIndex === i && m.url; }).pop();
+        const file = h("input", { type: "file", accept: "image/png,image/jpeg,image/webp", "aria-label": "Image for panel " + (i + 1) });
+        const key = a.id + ":panel:" + i;
         return h("div", { class: "panel" },
           h("b", { text: "Panel " + (i + 1) }),
+          image ? h("img", { class: "panel-thumb", src: image.url, alt: "Panel " + (i + 1) }) : null,
           h("span", { text: p.setting }),
           h("span", { text: p.action }),
           h("span", { text: "Caption: " + p.caption }),
           h("span", { class: "meta", text: "“" + p.quote + "”" }),
-          h("span", { class: "meta", text: clip }));
+          h("span", { class: "meta", text: voiceLine(a, p) }),
+          h("button", { class: "btn btn-secondary", type: "button", onclick: function (e) { copy(e.target, panelPrompt(c, i)); } }, "Copy prompt for this panel"),
+          file,
+          h("button", { class: "btn btn-primary", type: "button", disabled: busy === key, onclick: function () { uploadPanel(t, a, i, file, key); } },
+            busy === key ? "Uploading…" : image ? "Replace image" : "Upload image"));
       })),
-      h("div", { class: "toolbar", style: "margin-top:10px" },
-        h("button", { class: "btn btn-secondary", type: "button", onclick: function (e) {
-          navigator.clipboard.writeText(brief).then(function () { e.target.textContent = "Copied"; });
-        } }, "Copy brief for image AI")));
+      h("div", { class: "toolbar", style: "margin-top:12px" },
+        live
+          ? h("button", { class: "btn btn-secondary", type: "button", disabled: busy === a.id + ":publish", onclick: function () { publishComic(a, false); } }, "Hide comic from family")
+          : h("button", { class: "btn btn-primary", type: "button", disabled: !uploaded.length || busy === a.id + ":publish", onclick: function () { publishComic(a, true, uploaded.length, panels.length); } }, "Publish comic to family"),
+        h("button", { class: "btn btn-quiet", type: "button", onclick: function (e) { copy(e.target, characterSheetPrompt(c)); } }, "Copy prompt for a character sheet")));
   }
 
-  function briefFor(a) {
-    const c = a.comicScript || {};
+  function styleLines(c) {
     const lines = [
-      "Create a " + (c.panels || []).length + "-panel comic page in a warm, hand-drawn illustrated style.",
-      "Style and era: " + (c.style_notes || ""),
-      "Keep each character consistent in every panel:"
+      "Warm, hand-drawn illustrated comic style, soft colours, expressive faces.",
+      "Era, place and mood: " + (c.style_notes || ""),
+      "Characters (keep them looking exactly the same in every panel):"
     ];
     (c.characters || []).forEach(function (ch) { lines.push("- " + ch.name + ": " + ch.look); });
-    (c.panels || []).forEach(function (p, i) {
-      lines.push("Panel " + (i + 1) + ": " + p.setting + ". " + p.action + ". Caption text: \"" + p.caption + "\"");
-    });
-    lines.push("No other text in the image except the captions.");
-    return lines.join("\n");
+    return lines;
+  }
+
+  // One panel at a time, with no text, so the app can add correctly spelled captions.
+  function panelPrompt(c, i) {
+    const p = (c.panels || [])[i] || {};
+    return styleLines(c).concat([
+      "",
+      "Draw ONE comic panel (panel " + (i + 1) + " of " + (c.panels || []).length + "), landscape 4:3.",
+      "Scene: " + p.setting + ".",
+      "What we see: " + p.action + ".",
+      "",
+      "IMPORTANT: no text of any kind in the image — no captions, no speech bubbles, no letters, no signs, no numbers.",
+      "If I attached a photo of the person, base the character's face on it."
+    ]).join("\n");
+  }
+
+  function characterSheetPrompt(c) {
+    return styleLines(c).concat([
+      "",
+      "Draw a character sheet: each character above, full body, front and three-quarter view, on a plain background.",
+      "No text in the image. I will use this sheet as a reference so every panel looks consistent."
+    ]).join("\n");
+  }
+
+  function copy(button, text) {
+    const done = function () { const old = button.textContent; button.textContent = "Copied"; setTimeout(function () { button.textContent = old; }, 1500); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, function () { prompt("Copy this:", text); });
+    else prompt("Copy this:", text);
   }
 
   function mediaBlock(t, a, media, label) {
     const title = h("input", { type: "text", placeholder: "Title the family will see" });
     const file = h("input", { type: "file", accept: "image/png,image/jpeg,image/webp,video/mp4,video/webm" });
     const key = (a ? a.id : t.id) + ":upload";
-    return h("details", { open: Boolean(a) || media.length > 0 }, h("summary", null, label + " (" + media.length + ")"),
+    return h("details", { open: media.length > 0 }, h("summary", null, label + " (" + media.length + ")"),
       media.length ? h("div", { class: "thumbs" }, media.map(function (m) {
         return h("div", { class: "thumb" },
           m.url ? (m.kind === "video" ? h("video", { src: m.url, muted: true, preload: "metadata" }) : h("img", { src: m.url, alt: m.title || "" })) : null,
@@ -183,6 +227,26 @@
       h("div", { class: "upload", style: "margin-top:10px" }, title, file,
         h("button", { class: "btn btn-primary", type: "button", disabled: busy === key, onclick: function () { upload(t, a, file, title, key); } },
           busy === key ? "Uploading…" : "Upload and publish to family")));
+  }
+
+  async function uploadPanel(t, a, index, fileInput, key) {
+    const f = fileInput.files && fileInput.files[0];
+    if (!f) { alert("Choose an image first."); return; }
+    busy = key; render();
+    try {
+      const slot = await api("POST", { action: "media-upload-url", storytellerId: t.id, answerId: a.id, kind: "panel", panelIndex: index, mime: f.type });
+      const put = await fetch(slot.uploadUrl, { method: "PUT", headers: { "content-type": f.type, "x-upsert": "false" }, body: f });
+      if (!put.ok) throw new Error("Upload failed: " + put.status);
+      await api("POST", { action: "media-publish", mediaId: slot.mediaId });
+    } catch (e) { alert(e.message); }
+    busy = ""; load();
+  }
+
+  async function publishComic(a, publish, have, total) {
+    if (publish && have < total && !confirm(have + " of " + total + " panels have images. Publish anyway?")) return;
+    busy = a.id + ":publish"; render();
+    try { await api("POST", { action: "comic-publish", answerId: a.id, publish: publish }); } catch (e) { alert(e.message); }
+    busy = ""; load();
   }
 
   async function retry(a) {
