@@ -10,14 +10,14 @@ const PAD_BEFORE = 0.15; // seconds kept before the first word
 const PAD_AFTER = 0.35;  // and after the last, so words aren't clipped
 const MAX_CLIP = 30;
 
-async function ffmpegPath() {
+export async function ffmpegPath() {
   const mod = await import("ffmpeg-static");
   const path = mod.default || mod;
   if (!path) throw new Error("ffmpeg is not available on this server");
   return path;
 }
 
-function run(bin, args) {
+export function run(bin, args) {
   return new Promise((resolve, reject) => {
     execFile(bin, args, { timeout: 60000, maxBuffer: 1 << 20 }, (err, _out, stderr) => {
       if (err) reject(new Error("ffmpeg: " + String(stderr || err.message).slice(0, 300)));

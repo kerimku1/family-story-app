@@ -240,3 +240,117 @@ test("comic panels: voice clip only when allowed, gone when voice is off or stor
     server.close();
   }
 });
+
+test("automatic comics: approval draws a sheet and panels with the photos, redraw one panel, auto-publish", async () => {
+  const { server, store, apiLog, url } = await startTestServer(8796);
+  process.env.GEMINI_API_KEY = "test-gemini";
+  try {
+    const post = (path, body, headers = {}) => fetch(url + path, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) }).then(async (r) => ({ status: r.status, body: await r.json() }));
+    const auth = { authorization: "Bearer " + process.env.STUDIO_PASSWORD };
+    const waitFor = async (check) => { for (let i = 0; i < 200 && !(await check()); i++) await new Promise((r) => setTimeout(r, 30)); };
+    const gemini = () => apiLog.filter((c) => c.service === "gemini");
+
+    const created = await post("/api/create", { from: "Мухамед", name: "Мама", lang: "ru" });
+    const t = new URL(created.body.tellerUrl).searchParams.get("t");
+    const f = new URL(created.body.familyUrl).searchParams.get("f");
+    const teller = store.db.storytellers[0];
+
+    // Studio adds a reference photo (a real small JPEG made with ffmpeg).
+    const { execFileSync } = await import("node:child_process");
+    const ffmpeg = (await import("ffmpeg-static")).default;
+    const jpeg = execFileSync(ffmpeg, ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=orange:s=2000x1500", "-frames:v", "1", "-f", "mjpeg", "pipe:1"], { maxBuffer: 1 << 24 });
+    const ph = await post("/api/studio", { action: "media-upload-url", storytellerId: teller.id, kind: "photo", mime: "image/jpeg", title: "Мама, 1985" }, auth);
+    assert.equal(ph.status, 200, JSON.stringify(ph.body));
+    await fetch(ph.body.uploadUrl, { method: "PUT", headers: { "content-type": "image/jpeg" }, body: jpeg });
+    await post("/api/studio", { action: "media-publish", mediaId: ph.body.mediaId }, auth);
+    assert.equal(store.db.media.find((m) => m.kind === "photo").status, "reference");
+
+    const sent = await post("/api/teller", { t, action: "text-answer", questionIndex: 0, questionText: "Где вы родились?", text: "Я родилась в ауле у реки." });
+    const id = sent.body.answerId;
+    await waitFor(() => store.db.answers[0].status === "ready");
+    assert.equal(gemini().length, 0, "nothing is drawn before approval");
+
+    // Approval starts drawing: 1 character sheet + 2 panels.
+    await post("/api/teller", { t, action: "approve", answerId: id, approval: "approved" });
+    await waitFor(() => ["ready", "partial", "failed"].includes(store.db.answers[0].comic_status));
+    const a = store.db.answers[0];
+    assert.equal(a.comic_status, "ready", a.comic_error || "");
+    assert.equal(gemini().length, 3);
+    const [sheetCall, ...panelCalls] = gemini();
+    assert.match(sheetCall.body.contents[0].parts[0].text, /character reference sheet/);
+    assert.equal(sheetCall.body.generationConfig.imageConfig.aspectRatio, "3:2");
+    assert.equal(sheetCall.body.contents[0].parts.length, 2, "sheet gets the photo");
+    const sentPhoto = Buffer.from(sheetCall.body.contents[0].parts[1].inlineData.data, "base64");
+    assert.ok(sentPhoto.length < jpeg.length, "photo is shrunk before sending");
+    for (const c of panelCalls) {
+      const text = c.body.contents[0].parts[0].text;
+      assert.match(text, /no text of any kind/);
+      assert.match(text, /Image 1 is the character sheet/);
+      assert.match(text, /"Narrator as a girl"'s face/);
+      assert.equal(c.body.contents[0].parts.length, 3, "panel gets sheet + photo");
+      assert.equal(c.body.generationConfig.imageConfig.aspectRatio, "4:3");
+    }
+    const panels = () => store.db.media.filter((m) => m.answer_id === id && m.kind === "panel");
+    assert.deepEqual(panels().map((m) => m.panel_index).sort(), [0, 1]);
+    assert.ok(panels().every((m) => m.status === "draft"), "drafts until the studio publishes");
+    assert.equal(store.db.media.filter((m) => m.kind === "sheet").length, 1);
+
+    // Family sees nothing yet, and never the photo or the sheet.
+    let fam = await (await fetch(`${url}/api/family?f=${f}`)).json();
+    assert.deepEqual(fam.comics, []);
+    assert.deepEqual(fam.media, []);
+
+    // Approving again does not redraw.
+    await post("/api/teller", { t, action: "approve", answerId: id, approval: "approved" });
+    await new Promise((r) => setTimeout(r, 150));
+    assert.equal(gemini().length, 3);
+
+    // Redraw panel 2 only: one more call, reusing the saved sheet; only that panel is replaced.
+    const keep = panels().find((m) => m.panel_index === 0).id;
+    assert.equal((await post("/api/studio", { action: "comic-draw", answerId: id, panelIndex: 1 }, auth)).status, 200);
+    await waitFor(() => gemini().length === 4 && store.db.answers[0].comic_status === "ready");
+    assert.equal(gemini().length, 4);
+    assert.equal(panels().length, 2);
+    assert.equal(panels().find((m) => m.panel_index === 0).id, keep);
+
+    // Publish; then a redraw of a live comic stays live.
+    await post("/api/studio", { action: "comic-publish", answerId: id, publish: true }, auth);
+    fam = await (await fetch(`${url}/api/family?f=${f}`)).json();
+    assert.equal(fam.comics[0].panels.length, 2);
+    await post("/api/studio", { action: "comic-draw", answerId: id, panelIndex: 0 }, auth);
+    await waitFor(() => gemini().length === 5 && store.db.answers[0].comic_status === "ready");
+    assert.ok(panels().every((m) => m.status === "published"));
+
+    // A failed panel is reported and the old picture is kept.
+    globalThis.__GEMINI_FAIL__ = (prompt) => prompt.includes("panel 2 of 2");
+    await post("/api/studio", { action: "comic-draw", answerId: id }, auth);
+    await waitFor(() => ["partial", "failed"].includes(store.db.answers[0].comic_status));
+    assert.equal(store.db.answers[0].comic_status, "partial");
+    assert.match(store.db.answers[0].comic_error, /panel 2: .*SAFETY/);
+    assert.equal(panels().length, 2, "panel 2 keeps its previous image");
+    globalThis.__GEMINI_FAIL__ = null;
+
+    // Studio data: status visible, never the recording, the photo is marked as a reference.
+    const studio = await (await fetch(`${url}/api/studio`, { headers: auth })).json();
+    assert.equal(studio.aiDrawing, true);
+    assert.equal(studio.storytellers[0].answers[0].comicStatus, "partial");
+
+    // Auto-publish: a new approved story goes straight to the family page.
+    process.env.AUTO_PUBLISH = "on";
+    const s2 = await post("/api/teller", { t, action: "text-answer", questionIndex: 1, questionText: "Q2", text: "Мама пекла баурсаки." });
+    await waitFor(() => store.db.answers.find((x) => x.id === s2.body.answerId).status === "ready");
+    await post("/api/teller", { t, action: "approve", answerId: s2.body.answerId, approval: "approved" });
+    await waitFor(() => store.db.answers.find((x) => x.id === s2.body.answerId).comic_status === "ready");
+    fam = await (await fetch(`${url}/api/family?f=${f}`)).json();
+    assert.equal(fam.comics.length, 2);
+
+    // Without a Gemini key nothing is drawn automatically, and the studio says so.
+    delete process.env.GEMINI_API_KEY;
+    assert.equal((await post("/api/studio", { action: "comic-draw", answerId: id }, auth)).status, 400);
+  } finally {
+    delete process.env.GEMINI_API_KEY;
+    delete process.env.AUTO_PUBLISH;
+    globalThis.__GEMINI_FAIL__ = null;
+    server.close();
+  }
+});

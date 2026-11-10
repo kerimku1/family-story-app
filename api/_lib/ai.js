@@ -54,7 +54,8 @@ export const STORY_SCHEMA = obj({
     style_notes: str("In English: era, region and mood for the artist, based only on the story"),
     characters: list(obj({
       name: str("Character name as in the story"),
-      look: str("In English: age in this story and visual look, from stated details; say 'not described' where unknown")
+      look: str("In English: age in this story and visual look, from stated details; say 'not described' where unknown"),
+      is_storyteller: { type: "boolean", description: "True only for the storyteller themself (the narrator 'I'), at the age in this story" }
     }), "Characters to draw"),
     panels: list(obj({
       setting: str("In English: where and when the scene happens"),

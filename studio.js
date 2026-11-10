@@ -8,6 +8,7 @@
   let data = null;
   let error = "";
   let busy = "";
+  let pollTimer = 0;
 
   // Append only real nodes (DOM append would print "null" for empty slots).
   function add() {
@@ -51,6 +52,9 @@
     error = "";
     try {
       data = await api("GET");
+      clearTimeout(pollTimer);
+      const drawing = data.storytellers.some(function (t) { return t.answers.some(function (a) { return a.comicStatus === "drawing"; }); });
+      if (drawing) pollTimer = setTimeout(function () { if (!busy) load(); }, 6000);
     } catch (e) {
       data = null;
       error = e.status === 401 ? "Wrong password." : "Could not load: " + e.message;
@@ -94,9 +98,41 @@
       h("div", { class: "toolbar" }, h("h2", { text: t.name }), badge(t.lang)),
       h("p", { class: "meta", text: "Asked by " + t.from + " · " + t.answers.length + " answers · " + ready + " written · " + approved + " approved" }),
       h("div", { class: "toolbar" }, h("a", { class: "btn btn-secondary", href: familyUrl, target: "_blank", rel: "noopener" }, "Family page")),
+      photosBlock(t),
       lifeCard(t.lifeCard),
       t.answers.length ? h("div", null, t.answers.map(function (a) { return renderAnswer(t, a); })) : h("p", { class: "meta", text: "No answers yet." }),
-      mediaBlock(t, null, t.media.filter(function (m) { return !m.answerId; }), "General media (not tied to one story)"));
+      mediaBlock(t, null, t.media.filter(function (m) { return !m.answerId && (m.kind === "comic" || m.kind === "video"); }), "General media (not tied to one story)"));
+  }
+
+  function photosBlock(t) {
+    const photos = t.media.filter(function (m) { return m.kind === "photo" && m.url; });
+    const who = h("input", { type: "text", placeholder: "Who and when, e.g. Мама, 1985" });
+    const file = h("input", { type: "file", accept: "image/png,image/jpeg,image/webp" });
+    const key = t.id + ":photo";
+    return h("details", { open: true },
+      h("summary", null, "Photos of " + t.name + " for drawing (" + photos.length + ")"),
+      h("p", { class: "meta", text: "Used only so the AI draws a face that looks like them. The family never sees these. The newest 3 are used. Clear, front-facing photos work best." }),
+      photos.length ? h("div", { class: "thumbs" }, photos.map(function (m) {
+        return h("div", { class: "thumb" }, h("img", { src: m.url, alt: m.title || "photo" }),
+          h("div", null, h("span", { text: m.title || "photo" }),
+            h("button", { class: "btn btn-quiet danger", type: "button", onclick: function () { removeMedia(m, "Delete this photo?"); } }, "Delete")));
+      })) : null,
+      h("div", { class: "upload", style: "margin-top:10px" }, who, file,
+        h("button", { class: "btn btn-primary", type: "button", disabled: busy === key, onclick: function () { uploadPhoto(t, file, who, key); } },
+          busy === key ? "Uploading…" : "Add photo")));
+  }
+
+  async function uploadPhoto(t, fileInput, whoInput, key) {
+    const f = fileInput.files && fileInput.files[0];
+    if (!f) { alert("Choose a photo first."); return; }
+    busy = key; render();
+    try {
+      const slot = await api("POST", { action: "media-upload-url", storytellerId: t.id, kind: "photo", mime: f.type, title: whoInput.value });
+      const put = await fetch(slot.uploadUrl, { method: "PUT", headers: { "content-type": f.type, "x-upsert": "false" }, body: f });
+      if (!put.ok) throw new Error("Upload failed: " + put.status);
+      await api("POST", { action: "media-publish", mediaId: slot.mediaId });
+    } catch (e) { alert(e.message); }
+    busy = ""; load();
   }
 
   function lifeCard(card) {
@@ -114,7 +150,7 @@
   function renderAnswer(t, a) {
     const media = t.media.filter(function (m) { return m.answerId === a.id; });
     const panelMedia = media.filter(function (m) { return m.kind === "panel"; });
-    const otherMedia = media.filter(function (m) { return m.kind !== "panel"; });
+    const otherMedia = media.filter(function (m) { return m.kind === "comic" || m.kind === "video"; });
     const head = h("div", { class: "toolbar" },
       h("h3", { text: "Q" + (a.questionIndex + 1) + ". " + (a.title || a.question) }),
       badge(a.status), badge(a.approval), a.typed ? badge("typed") : (a.allowVoice ? badge("voice allowed") : badge("no voice")),
@@ -145,8 +181,18 @@
     const panels = c.panels || [];
     const uploaded = panelMedia.filter(function (m) { return m.status === "draft" || m.status === "published"; });
     const live = uploaded.some(function (m) { return m.status === "published"; });
+    const drawing = a.comicStatus === "drawing";
+    const hasPhotos = t.media.some(function (m) { return m.kind === "photo" && m.url; });
+    const sheet = t.media.filter(function (m) { return m.kind === "sheet" && m.answerId === a.id && m.url; }).pop();
     return h("details", { open: true }, h("summary", null, "Comic: " + uploaded.length + " of " + panels.length + " panels" + (live ? " · on family page" : "")),
-      h("p", { class: "meta", text: "Ask the image AI for each panel without any text. The app adds the captions itself, so they are always spelled right." }),
+      drawStatus(a, uploaded.length, live, hasPhotos),
+      data.aiDrawing ? h("div", { class: "toolbar" },
+        h("button", { class: "btn btn-primary", type: "button", disabled: drawing || busy === a.id + ":draw",
+          onclick: function () { drawComic(a, null, uploaded.length); } }, uploaded.length ? "Redraw whole comic with AI" : "Draw comic with AI"),
+        sheet ? h("a", { class: "btn btn-quiet", href: sheet.url, target: "_blank", rel: "noopener" }, "View character sheet") : null) : null,
+      h("p", { class: "meta", text: data.aiDrawing
+        ? "Or draw panels yourself: copy a prompt, use it in Gemini, and upload the image. Images have no text; the app adds the captions."
+        : "Automatic drawing is off (add GEMINI_API_KEY in Vercel). Copy a prompt per panel into Gemini and upload the image. The app adds the captions." }),
       h("p", { class: "meta", text: c.style_notes || "" }),
       c.characters && c.characters.length ? h("div", { class: "grid" }, c.characters.map(function (ch) {
         return h("div", { class: "panel" }, h("b", { text: "Character" }), h("span", { text: ch.name }), h("span", { class: "meta", text: ch.look }));
@@ -163,7 +209,8 @@
           h("span", { text: "Caption: " + p.caption }),
           h("span", { class: "meta", text: "“" + p.quote + "”" }),
           h("span", { class: "meta", text: voiceLine(a, p) }),
-          h("button", { class: "btn btn-secondary", type: "button", onclick: function (e) { copy(e.target, panelPrompt(c, i)); } }, "Copy prompt for this panel"),
+          data.aiDrawing && image ? h("button", { class: "btn btn-secondary", type: "button", disabled: drawing, onclick: function () { drawComic(a, i); } }, "Redraw this panel with AI") : null,
+          h("button", { class: "btn btn-quiet", type: "button", onclick: function (e) { copy(e.target, panelPrompt(c, i)); } }, "Copy prompt for this panel"),
           file,
           h("button", { class: "btn btn-primary", type: "button", disabled: busy === key, onclick: function () { uploadPanel(t, a, i, file, key); } },
             busy === key ? "Uploading…" : image ? "Replace image" : "Upload image"));
@@ -173,6 +220,25 @@
           ? h("button", { class: "btn btn-secondary", type: "button", disabled: busy === a.id + ":publish", onclick: function () { publishComic(a, false); } }, "Hide comic from family")
           : h("button", { class: "btn btn-primary", type: "button", disabled: !uploaded.length || busy === a.id + ":publish", onclick: function () { publishComic(a, true, uploaded.length, panels.length); } }, "Publish comic to family"),
         h("button", { class: "btn btn-quiet", type: "button", onclick: function (e) { copy(e.target, characterSheetPrompt(c)); } }, "Copy prompt for a character sheet")));
+  }
+
+  function drawStatus(a, have, live, hasPhotos) {
+    const lines = [];
+    if (a.comicStatus === "drawing") lines.push(h("div", { class: "notice good writing", text: "Drawing with AI… usually about a minute. This page refreshes by itself." }));
+    else if (a.comicStatus === "ready" && !live) lines.push(h("div", { class: "notice good", text: "Drawn by AI. Check every panel, redraw any that look wrong, then publish." }));
+    else if (a.comicStatus === "partial") lines.push(h("div", { class: "notice bad", text: "Some panels couldn't be drawn: " + (a.comicError || "") }));
+    else if (a.comicStatus === "failed") lines.push(h("div", { class: "notice bad", text: "Drawing failed: " + (a.comicError || "") }));
+    if (data.aiDrawing && !hasPhotos && !have) lines.push(h("p", { class: "meta", text: "Tip: add photos of the storyteller above before drawing, so the character looks like them." }));
+    if (data.autoPublish) lines.push(h("p", { class: "meta", text: "Auto-publish is on: finished comics go to the family page without review." }));
+    return lines.length ? h("div", { class: "draw-status" }, lines) : null;
+  }
+
+  async function drawComic(a, panelIndex, have) {
+    if (panelIndex === null && have && !confirm("Redraw all panels? The current pictures will be replaced.")) return;
+    busy = a.id + ":draw"; render();
+    try { await api("POST", { action: "comic-draw", answerId: a.id, panelIndex: panelIndex }); }
+    catch (e) { alert(e.message); }
+    busy = ""; setTimeout(load, 800);
   }
 
   function styleLines(c) {
@@ -271,8 +337,8 @@
     busy = ""; load();
   }
 
-  async function removeMedia(m) {
-    if (!confirm("Delete this from the family page?")) return;
+  async function removeMedia(m, question) {
+    if (!confirm(question || "Delete this from the family page?")) return;
     try { await api("POST", { action: "media-delete", mediaId: m.id }); } catch (e) { alert(e.message); }
     load();
   }

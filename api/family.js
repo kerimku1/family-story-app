@@ -41,7 +41,7 @@ export default async function handler(req, res) {
 
     // Finished comic pages and films uploaded as single files.
     const items = [];
-    for (const m of media.filter((x) => x.kind !== "panel")) {
+    for (const m of media.filter((x) => x.kind === "comic" || x.kind === "video")) {
       items.push({ id: m.id, kind: m.kind, title: m.title, url: await store.signedUrl("media", m.path, HOUR) });
     }
 

@@ -10,6 +10,7 @@ import { getStore } from "./_lib/store.js";
 import { send, fail, readJson, query, cleanText, extFor, inBackground } from "./_lib/http.js";
 import { processAnswer } from "./_lib/pipeline.js";
 import { syncClips, clipPaths } from "./_lib/clips.js";
+import { generateComic, autoComicsOn } from "./_lib/comic.js";
 
 export const config = { maxDuration: 300 };
 
@@ -107,7 +108,13 @@ export default async function handler(req, res) {
     if (body.action === "approve") {
       if (!["approved", "hidden"].includes(body.approval)) return fail(res, 400, "Bad approval");
       await store.updateAnswer(answer.id, { approval: body.approval });
-      await inBackground(syncClips(store, answer.id));
+      const jobs = [syncClips(store, answer.id)];
+      // First approval: draw the comic automatically (only if it hasn't been drawn yet).
+      if (body.approval === "approved" && autoComicsOn()) {
+        const drawn = (await store.listMediaForAnswer(answer.id)).some((m) => m.kind === "panel");
+        if (!drawn) jobs.push(generateComic(store, answer.id));
+      }
+      await inBackground(Promise.all(jobs));
       return send(res, 200, { ok: true });
     }
 

@@ -1,4 +1,4 @@
--- Family Story: database and private storage (includes update 002).
+-- Family Story: database and private storage (includes updates 002 and 003).
 -- Run once in Supabase: Dashboard → SQL Editor → New query → paste → Run.
 
 create extension if not exists pgcrypto;
@@ -35,17 +35,21 @@ create table if not exists answers (
   follow_up_questions jsonb,
   approval text not null default 'waiting', -- waiting | approved | hidden
   allow_voice boolean not null default false, -- storyteller allows short voice clips in the comic
+  comic_status text,                     -- drawing | ready | partial | failed (automatic drawing)
+  comic_error text,
+  comic_started_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
 create index if not exists answers_storyteller_idx on answers (storyteller_id, created_at);
 
--- Finished comics and videos — the only thing the family sees.
+-- Comics, videos and drawing references. The family sees only published comics and videos;
+-- 'photo' (real photos of the storyteller) and 'sheet' (AI character sheets) are never shown to them.
 create table if not exists media (
   id uuid primary key default gen_random_uuid(),
   storyteller_id uuid not null references storytellers(id) on delete cascade,
   answer_id uuid references answers(id) on delete set null,
-  kind text not null check (kind in ('comic', 'video', 'panel')),
+  kind text not null check (kind in ('comic', 'video', 'panel', 'photo', 'sheet')),
   panel_index int,                       -- for kind = 'panel': which comic panel this image is
   title text,
   path text not null,                    -- path in the private "media" bucket

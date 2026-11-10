@@ -39,6 +39,7 @@ creates links  ───────►  opens link, answers by voice
 | `api/family.js` | Family page data (finished media only) |
 | `api/studio.js` | Studio data and media uploads (password-protected) |
 | `api/_lib/pipeline.js` | Transcribe → write story → comic script → life card |
+| `api/_lib/comic.js` | Draws the character sheet and comic panels with Gemini |
 | `api/_lib/clips.js` | Cuts one-sentence voice clips for panels (only when the storyteller allows it) |
 | `api/_lib/ai.js` | ElevenLabs Scribe and Claude calls, and the prompt |
 | `supabase/schema.sql` | Database tables and private storage buckets |
@@ -52,7 +53,7 @@ You need four accounts. Supabase and Vercel have free plans; ElevenLabs and Anth
 
 1. Go to supabase.com, sign up, and click **New project**. Choose a region close to your users and save the database password somewhere safe.
 2. When the project is ready, open **SQL Editor → New snippet**. Paste everything from `supabase/schema.sql` and click **Run**. You should see "Success".
-   - **Already set up before?** Run `supabase/002_panels_and_voice.sql` the same way instead (it only adds the new fields).
+   - **Already set up before?** Instead, run the update files you haven't run yet, in order: `supabase/002_panels_and_voice.sql`, then `supabase/003_auto_comics.sql`.
 3. Open **Project Settings → API Keys** (or **API**). Copy:
    - the **Project URL** → this is `SUPABASE_URL`
    - the **secret** key (older projects call it **service_role**) → this is `SUPABASE_SECRET_KEY`. Keep it secret; never put it in browser code.
@@ -89,14 +90,32 @@ If a story shows "couldn't process", open the studio: the error message says whi
 
 The GitHub Pages copy can't save answers (it has no server). On GitHub: **Settings → Pages → Unpublish site**.
 
-## Making comics (in the studio)
+## Making comics
 
 A comic is a set of panels. The image AI draws only pictures; **the app adds the captions**, so they are always spelled right, in Kazakh, Russian or English.
 
-1. In the studio, open an approved story. Optionally click **Copy prompt for a character sheet** first and generate it, so faces stay the same in every panel.
-2. For each panel, click **Copy prompt for this panel**, paste it into Gemini (attach a photo of the person and the character sheet), and download the image.
-3. Under that panel, choose the file and click **Upload image**. Use **Replace image** to swap one later.
-4. Click **Publish comic to family**. It appears on the family page panel by panel, with captions.
+### Automatic (with a Gemini key)
+
+1. In the studio, add 1–3 clear photos of the storyteller under **Photos of … for drawing**. They are used only so the faces look like them; the family never sees them.
+2. When the storyteller taps **OK to use** on a story, the server draws it by itself, in about a minute:
+   a character sheet from the photos, then every panel with that sheet attached, so faces and style stay the same.
+3. In the studio, check the panels. Use **Redraw this panel with AI** for any that look wrong, or **Redraw whole comic with AI**.
+4. Click **Publish comic to family**.
+
+Settings in Vercel → Environment Variables:
+
+| Name | What it does |
+| --- | --- |
+| `GEMINI_API_KEY` | Turns on automatic drawing. From Google AI Studio → Get API key (billing must be on: image generation has no free tier) |
+| `AUTO_PUBLISH` | `on` = publish finished comics to the family without review. Default: off (you review first) |
+| `AUTO_COMICS` | `off` = don't draw on approval; only when you click Draw in the studio |
+| `GEMINI_IMAGE_MODEL` | Optional. Default `gemini-3.1-flash-image-preview` (about $0.07 per image at 1K); `gemini-3-pro-image-preview` is higher quality and about twice the price |
+
+Each story costs about one character sheet plus one image per panel (usually 4–6).
+
+### By hand (no key needed)
+
+For each panel, click **Copy prompt for this panel**, use it in Gemini, and upload the image under that panel. Then **Publish comic to family**.
 
 ### The real voice
 

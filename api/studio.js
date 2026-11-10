@@ -9,9 +9,13 @@
 //                                                                 panel: uploaded, waiting for "comic-publish"
 // POST { action: "comic-publish", answerId, publish: true|false } → show or hide this story's panel comic
 // POST { action: "media-delete", mediaId }
+// POST { action: "comic-draw", answerId, panelIndex? }          → draw the whole comic with AI, or redraw one panel
+//      kind "photo" in media-upload-url = a real photo of the storyteller, used only as a drawing reference
 import { getStore } from "./_lib/store.js";
 import { send, fail, readJson, isAdmin, cleanText, inBackground } from "./_lib/http.js";
 import { processAnswer, mergeLifeCard } from "./_lib/pipeline.js";
+import { generateComic } from "./_lib/comic.js";
+import { env } from "./_lib/store.js";
 
 export const config = { maxDuration: 300 };
 
@@ -29,6 +33,9 @@ function answerForStudio(a) {
     durationSec: a.duration_sec,
     typed: !a.audio_path,
     allowVoice: Boolean(a.allow_voice),
+    comicStatus: a.comic_status || null,
+    comicError: a.comic_error || null,
+    comicStartedAt: a.comic_started_at || null,
     createdAt: a.created_at,
     title: approved ? a.title : null,
     story: approved ? a.story : null,
@@ -56,7 +63,7 @@ export default async function handler(req, res) {
         for (const m of media) {
           mediaOut.push({
             id: m.id, answerId: m.answer_id, kind: m.kind, title: m.title, status: m.status, panelIndex: m.panel_index,
-            url: m.status === "published" || m.status === "draft" ? await store.signedUrl("media", m.path, 60 * 60) : null
+            url: ["published", "draft", "reference"].includes(m.status) ? await store.signedUrl("media", m.path, 60 * 60) : null
           });
         }
         out.push({
@@ -74,7 +81,7 @@ export default async function handler(req, res) {
           media: mediaOut
         });
       }
-      return send(res, 200, { storytellers: out });
+      return send(res, 200, { storytellers: out, aiDrawing: Boolean(env("GEMINI_API_KEY")), autoPublish: env("AUTO_PUBLISH").toLowerCase() === "on" });
     }
 
     if (req.method !== "POST") return fail(res, 405, "GET or POST only");
@@ -92,14 +99,16 @@ export default async function handler(req, res) {
     if (body.action === "media-upload-url") {
       const teller = await store.storytellerById(String(body.storytellerId || ""));
       if (!teller) return fail(res, 404, "Storyteller not found");
-      const kind = ["video", "panel"].includes(body.kind) ? body.kind : "comic";
+      const kind = ["video", "panel", "photo"].includes(body.kind) ? body.kind : "comic";
       const mime = String(body.mime || "");
       const ext = MEDIA_EXT[mime];
       if (!ext) return fail(res, 400, "Use PNG, JPG, WEBP, MP4 or WEBM");
-      if (kind === "panel" && !mime.startsWith("image/")) return fail(res, 400, "A panel must be an image");
+      if ((kind === "panel" || kind === "photo") && !mime.startsWith("image/")) return fail(res, 400, "This must be an image");
       let answerId = null;
       let panelIndex = null;
-      if (body.answerId) {
+      if (kind === "photo") {
+        // Reference photos belong to the storyteller, not to one story.
+      } else if (body.answerId) {
         const answer = await store.answerById(String(body.answerId));
         if (!answer || answer.storyteller_id !== teller.id) return fail(res, 404, "Answer not found");
         if (answer.approval !== "approved") return fail(res, 400, "The storyteller has not approved this story");
@@ -140,6 +149,8 @@ export default async function handler(req, res) {
           await store.updateMedia(media.id, { status: live ? "published" : "draft" });
           await store.remove("media", old.map((m) => m.path).filter((p) => p && p !== "pending"));
           for (const m of old) await store.deleteMedia(m.id);
+        } else if (media.kind === "photo") {
+          await store.updateMedia(media.id, { status: "reference" });
         } else {
           await store.updateMedia(media.id, { status: "published" });
         }
@@ -147,6 +158,21 @@ export default async function handler(req, res) {
         if (media.path && media.path !== "pending") await store.remove("media", [media.path]);
         await store.deleteMedia(media.id);
       }
+      return send(res, 200, { ok: true });
+    }
+
+    if (body.action === "comic-draw") {
+      if (!env("GEMINI_API_KEY")) return fail(res, 400, "Add GEMINI_API_KEY in Vercel to draw comics automatically");
+      const answer = await store.answerById(String(body.answerId || ""));
+      if (!answer) return fail(res, 404, "Answer not found");
+      if (answer.approval !== "approved") return fail(res, 400, "The storyteller has not approved this story");
+      if (!answer.comic_script || !(answer.comic_script.panels || []).length) return fail(res, 400, "This story has no comic script yet");
+      const one = body.panelIndex === undefined || body.panelIndex === null ? null : Number(body.panelIndex);
+      if (one !== null && (!Number.isInteger(one) || one < 0 || one >= answer.comic_script.panels.length)) return fail(res, 400, "Bad panel");
+      if (answer.comic_status === "drawing" && Date.now() - Date.parse(answer.comic_started_at || 0) < 8 * 60 * 1000) {
+        return fail(res, 409, "Already drawing, please wait");
+      }
+      await inBackground(generateComic(store, answer.id, one === null ? { newSheet: true } : { panelIndexes: [one] }));
       return send(res, 200, { ok: true });
     }
 

@@ -28,3 +28,4 @@
 .studio summary > .toolbar { display: inline-flex; vertical-align: middle; }
 .studio .panel-thumb { width: 100%; border-radius: 8px; border: 1px solid var(--line); display: block; }
 .studio .panel input[type=file] { font-size: 13px; }
+.studio .draw-status { display: flex; flex-direction: column; gap: 8px; margin: 8px 0; }

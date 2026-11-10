@@ -2,6 +2,7 @@
 // audio → transcript with word timings → story + details + comic script → life card.
 import { transcribe, writeStory } from "./ai.js";
 import { syncClips, clipPaths } from "./clips.js";
+import { generateComic, autoComicsOn } from "./comic.js";
 
 const CARD_KEYS = ["people", "places", "times", "objects", "phrases", "traits", "appearance"];
 
@@ -104,6 +105,12 @@ export async function processAnswer(store, answerId, { fetchImpl = fetch } = {})
 
     if (oldClips.length) await store.remove("media", oldClips);
     await syncClips(store, answerId);
+
+    // A rewritten story that was already approved gets a fresh comic for its new script.
+    const done = await store.answerById(answerId);
+    if (done && done.approval === "approved" && autoComicsOn()) {
+      await generateComic(store, answerId, { force: true, newSheet: true, fetchImpl });
+    }
   } catch (err) {
     console.error("processAnswer failed", answerId, err);
     await store.updateAnswer(answerId, { status: "failed", error: String(err.message || err).slice(0, 500) });

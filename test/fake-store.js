@@ -75,7 +75,7 @@ export function sampleStory() {
     },
     comic: {
       style_notes: "Rural Kazakhstan village by a river, warm Sunday morning",
-      characters: [{ name: "Narrator as a girl", look: "young girl, not described further" }, { name: "Mama", look: "not described" }],
+      characters: [{ name: "Narrator as a girl", look: "young girl, not described further", is_storyteller: true }, { name: "Mama", look: "not described", is_storyteller: false }],
       panels: [
         { setting: "Village by a river", action: "A white house with blue shutters", caption: "Дом у реки", quote: "у нас был белый дом с синими ставнями" },
         { setting: "Kitchen, Sunday", action: "Mother frying baursaks", caption: "Воскресенье", quote: "Мама пекла баурсаки каждое воскресенье" }
@@ -93,6 +93,18 @@ export function installFakeApis(log = []) {
       log.push({ service: "elevenlabs", url, init });
       const words = SAMPLE_TRANSCRIPT.split(" ").map((w, i) => ({ text: w, start: i * 0.4, end: i * 0.4 + 0.35, type: "word" }));
       return Response.json({ text: SAMPLE_TRANSCRIPT, language_code: "rus", words });
+    }
+    if (url.startsWith("https://generativelanguage.googleapis.com/")) {
+      const body = JSON.parse(init.body);
+      log.push({ service: "gemini", url, init, body });
+      const prompt = body.contents[0].parts[0].text;
+      if (globalThis.__GEMINI_FAIL__ && globalThis.__GEMINI_FAIL__(prompt)) {
+        return Response.json({ candidates: [{ finishReason: "SAFETY", content: { parts: [] } }] });
+      }
+      const n = log.filter((c) => c.service === "gemini").length;
+      // A real 1x1 PNG, tagged so tests can tell images apart.
+      const png = Buffer.concat([Buffer.from("89504e470d0a1a0a0000000d4948445200000001000000010806000000" + "1f15c4890000000d49444154789c6360f8cfc0f01f0005fe02fe" + "a7d4a3a40000000049454e44ae426082", "hex"), Buffer.from("#" + n)]);
+      return Response.json({ candidates: [{ finishReason: "STOP", content: { role: "model", parts: [{ text: "here" }, { inlineData: { mimeType: "image/png", data: png.toString("base64") } }] } }] });
     }
     if (url.startsWith("https://api.anthropic.com/")) {
       log.push({ service: "anthropic", url, init, body: JSON.parse(init.body) });
