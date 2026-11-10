@@ -33,6 +33,13 @@ export function createFakeStore(baseUrl = "http://localhost") {
     async storytellerById(id) { return clone(db.storytellers.find((r) => r.id === id)); },
     async listStorytellers() { return clone([...db.storytellers].reverse()); },
     async updateStoryteller(id, patch) { return update("storytellers", id, patch); },
+    async deleteStoryteller(id) {
+      remove("storytellers", id);
+      const gone = new Set(db.answers.filter((r) => r.storyteller_id === id).map((r) => r.id));
+      db.answers = db.answers.filter((r) => r.storyteller_id !== id);
+      db.parts = db.parts.filter((r) => r.storyteller_id !== id && !gone.has(r.answer_id));
+      db.media = db.media.filter((r) => r.storyteller_id !== id);
+    },
 
     async createAnswer(row) { return insert("answers", { approval: "waiting", allow_voice: false, ...row }); },
     async answerById(id) { return clone(db.answers.find((r) => r.id === id)); },

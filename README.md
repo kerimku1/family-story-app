@@ -23,7 +23,7 @@ one question             lead-up questions
 | --- | --- | --- |
 | Family member who sets it up | `/` | Who is this person to you → 30 questions (or your own) → the 5 lead-up questions and two links |
 | Storyteller | `/?t=…` | The main question and its lead-up questions, record or type, their own written stories, approve / hide / delete |
-| Studio (you) | `/studio.html` | Approved stories, life card, comic script with voice-clip timings. Never recordings, never unapproved stories |
+| Studio (you) | `/studio.html` | One person at a time (newest first). Each story shows its progress and **one next step** (Draw the comic → Send comic to the family). Never recordings, never unapproved stories |
 | Family | `/family.html?f=…` | Finished comics and films; their questions and how far along each is (never the answers); "Ask another question" |
 
 ## Files
@@ -85,10 +85,10 @@ You need four accounts. Supabase and Vercel have free plans; ElevenLabs and Anth
 1. Open your Vercel address, choose who the person is and one question, and create the links. Open the storyteller link on your phone.
 2. Answer a lead-up question by voice or text and tap **Send**. You should see "Saved". Answer a few more, then tap **Write my story**.
 3. Wait about a minute and open **My stories**: your story should be written. Tap **OK to use**.
-4. Open `/studio.html`, enter your studio password. You should see the story and its comic script.
+4. Open `/studio.html`, enter your studio password. The story's box says what to do next.
 5. Upload any image as a test and open the family link: the image appears there.
 
-If a story shows "couldn't process", open the studio: the error message says which key or service failed. Fix it in Vercel and click **Retry**.
+If a story shows "couldn't process", open the studio: the error message says which key or service failed. Fix it in Vercel and click **Try again**.
 
 ### 6. Turn off the old GitHub Pages site
 
@@ -100,11 +100,11 @@ A comic is a set of panels. The image AI draws only pictures; **the app adds the
 
 ### Automatic (with a Gemini key)
 
-1. In the studio, add 1–3 clear photos of the storyteller under **Photos of … for drawing**. They are used only so the faces look like them; the family never sees them.
+1. In the studio, add 1–3 clear photos of the storyteller under **Photos of … (optional)** → **Add a photo**. They are used only so the faces look like them; the family never sees them.
 2. When the storyteller taps **OK to use** on a story, the server draws it by itself, in about a minute:
    a character sheet from the photos, then every panel with that sheet attached, so faces and style stay the same.
-3. In the studio, check the panels. Use **Redraw this panel with AI** for any that look wrong, or **Redraw whole comic with AI**.
-4. Click **Publish comic to family**.
+3. In the studio, check the panels. Tap **Redraw** under any picture that looks wrong (to redraw all of them: **More options → Redraw the whole comic**).
+4. Tap **Send comic to the family**.
 
 Settings in Vercel → Environment Variables:
 
@@ -119,7 +119,9 @@ Each story costs about one character sheet plus one image per panel (usually 4�
 
 ### By hand (no key needed)
 
-For each panel, click **Copy prompt for this panel**, use it in Gemini, and upload the image under that panel. Then **Publish comic to family**.
+Open **More options**, tap **Copy prompt 1** (2, 3…), make the picture in Gemini, then tap **Use my own** under that picture. Then **Send comic to the family**.
+
+To clean up test data, open the person in the studio → **More for …** → **Delete …** (or **More options → Delete story** for one story).
 
 ### The real voice
 
@@ -144,6 +146,7 @@ Typed answers have no voice, so their comics are pictures and captions only.
 npm install
 npm test                    # API and pipeline tests with fake storage and fake AI
 node test/test-server.js    # full site at http://localhost:8787, studio password: studio-test
+node test/seed-demo.js      # same, with demo people and stories, at http://localhost:8791
 ```
 
 To run against real services: `npm i -g vercel`, then `vercel link` and `vercel env pull`, then `vercel dev`.

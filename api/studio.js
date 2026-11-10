@@ -11,12 +11,14 @@
 // POST { action: "media-delete", mediaId }
 // POST { action: "comic-draw", answerId, panelIndex? }          → draw the whole comic with AI, or redraw one panel
 //      kind "photo" in media-upload-url = a real photo of the storyteller, used only as a drawing reference
+// POST { action: "story-delete", answerId }                    → delete one story and everything made from it
+// POST { action: "person-delete", storytellerId }              → delete a person, all their stories, photos and links
 import { getStore } from "./_lib/store.js";
 import { send, fail, readJson, isAdmin, cleanText, inBackground } from "./_lib/http.js";
 import { processAnswer, mergeLifeCard } from "./_lib/pipeline.js";
 import { generateComic } from "./_lib/comic.js";
 import { env } from "./_lib/store.js";
-import { storyProgress } from "./_lib/stories.js";
+import { storyProgress, deleteStory, deleteStoryteller } from "./_lib/stories.js";
 
 export const config = { maxDuration: 300 };
 
@@ -180,6 +182,20 @@ export default async function handler(req, res) {
         return fail(res, 409, "Already drawing, please wait");
       }
       await inBackground(generateComic(store, answer.id, one === null ? { newSheet: true } : { panelIndexes: [one] }));
+      return send(res, 200, { ok: true });
+    }
+
+    if (body.action === "story-delete") {
+      const answer = await store.answerById(String(body.answerId || ""));
+      if (!answer) return fail(res, 404, "Answer not found");
+      await deleteStory(store, answer);
+      return send(res, 200, { ok: true });
+    }
+
+    if (body.action === "person-delete") {
+      const teller = await store.storytellerById(String(body.storytellerId || ""));
+      if (!teller) return fail(res, 404, "Storyteller not found");
+      await deleteStoryteller(store, teller);
       return send(res, 200, { ok: true });
     }
 

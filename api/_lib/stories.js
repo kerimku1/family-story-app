@@ -1,6 +1,7 @@
 // A story = one main question for a storyteller, answered in ~5 lead-up parts.
 import { writeSteps } from "./ai.js";
 import { cleanText } from "./http.js";
+import { clipPaths } from "./clips.js";
 
 export const RELATIONSHIPS = ["parent", "child", "partner", "friend"];
 
@@ -38,4 +39,25 @@ export function storyProgress(answer, parts) {
     answeredParts,
     spoken: mine.some((p) => p.audio_path)
   };
+}
+
+// Deletes one story completely: recordings, clips, pictures, parts and the story itself.
+export async function deleteStory(store, answer) {
+  const parts = await store.listParts(answer.id);
+  const recordings = [...parts.map((p) => p.audio_path), answer.audio_path].filter(Boolean);
+  if (recordings.length) await store.remove("recordings", recordings);
+  const media = await store.listMediaForAnswer(answer.id);
+  await store.remove("media", [...clipPaths(answer), ...media.map((m) => m.path).filter((p) => p && p !== "pending")]);
+  for (const m of media) await store.deleteMedia(m.id);
+  for (const p of parts) await store.deletePart(p.id);
+  await store.deleteAnswer(answer.id);
+}
+
+// Deletes a person and everything about them, including photos and both links.
+export async function deleteStoryteller(store, teller) {
+  for (const a of await store.listAnswers(teller.id)) await deleteStory(store, a);
+  const media = await store.listMedia(teller.id);
+  await store.remove("media", media.map((m) => m.path).filter((p) => p && p !== "pending"));
+  for (const m of media) await store.deleteMedia(m.id);
+  await store.deleteStoryteller(teller.id);
 }

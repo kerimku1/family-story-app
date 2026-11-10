@@ -11,9 +11,9 @@
 import { getStore } from "./_lib/store.js";
 import { send, fail, readJson, query, extFor, inBackground } from "./_lib/http.js";
 import { processAnswer, transcribePart } from "./_lib/pipeline.js";
-import { syncClips, clipPaths } from "./_lib/clips.js";
+import { syncClips } from "./_lib/clips.js";
 import { generateComic, autoComicsOn } from "./_lib/comic.js";
-import { storyProgress } from "./_lib/stories.js";
+import { storyProgress, deleteStory } from "./_lib/stories.js";
 
 export const config = { maxDuration: 300 };
 
@@ -146,14 +146,7 @@ export default async function handler(req, res) {
     }
 
     if (body.action === "delete") {
-      const parts = await store.listParts(answer.id);
-      const recordings = [...parts.map((p) => p.audio_path), answer.audio_path].filter(Boolean);
-      if (recordings.length) await store.remove("recordings", recordings);
-      const media = await store.listMediaForAnswer(answer.id);
-      await store.remove("media", [...clipPaths(answer), ...media.map((m) => m.path).filter((p) => p && p !== "pending")]);
-      for (const m of media) await store.deleteMedia(m.id);
-      for (const p of parts) await store.deletePart(p.id);
-      await store.deleteAnswer(answer.id);
+      await deleteStory(store, answer);
       return send(res, 200, { ok: true });
     }
 

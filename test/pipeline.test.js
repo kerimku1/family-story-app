@@ -467,3 +467,44 @@ test("automatic comics: approval draws a sheet and panels with the photos, redra
     server.close();
   }
 });
+
+test("studio deletes a story or a whole person with all their files", async () => {
+  const { server, store, url } = await startTestServer(8794);
+  const { post, waitFor, tokens, latestStory } = client(url);
+  const auth = { authorization: "Bearer " + process.env.STUDIO_PASSWORD };
+  try {
+    const keep = tokens((await post("/api/create", { from: "M", name: "Айгерим", lang: "ru", relationship: "partner", mainKey: "r01", mainQuestion: "Как мы познакомились?" })).body);
+    const gone = tokens((await post("/api/create", { from: "M", name: "Мама", lang: "ru", ...DREAM })).body);
+    const keepTeller = store.db.storytellers.find((s) => s.name === "Айгерим");
+    const goneTeller = store.db.storytellers.find((s) => s.name === "Мама");
+
+    // Mama: a voice part, a reference photo.
+    const s = await latestStory(gone.t);
+    const slot = await post("/api/teller", { t: gone.t, action: "upload-url", answerId: s.id, partIndex: 0, mime: "audio/webm" });
+    await fetch(slot.body.uploadUrl, { method: "PUT", headers: { "content-type": "audio/webm" }, body: new Uint8Array([1, 2, 3]) });
+    await post("/api/teller", { t: gone.t, action: "uploaded", partId: slot.body.partId });
+    await waitFor(() => store.db.parts.some((p) => p.status === "ready"));
+    const ph = await post("/api/studio", { action: "media-upload-url", storytellerId: goneTeller.id, kind: "photo", mime: "image/png" }, auth);
+    await fetch(ph.body.uploadUrl, { method: "PUT", headers: { "content-type": "image/png" }, body: new Uint8Array([137, 80]) });
+    await post("/api/studio", { action: "media-publish", mediaId: ph.body.mediaId }, auth);
+
+    // Partner: two stories, delete the older one.
+    await post("/api/family", { f: keep.f, action: "ask", mainKey: "r02", mainQuestion: "Q2" });
+    const first = store.db.answers.find((a) => a.storyteller_id === keepTeller.id);
+    assert.equal((await post("/api/studio", { action: "story-delete", answerId: first.id })).status, 401);
+    assert.equal((await post("/api/studio", { action: "story-delete", answerId: first.id }, auth)).status, 200);
+    assert.equal(store.db.answers.filter((a) => a.storyteller_id === keepTeller.id).length, 1);
+
+    // Delete Mama completely.
+    assert.equal((await post("/api/studio", { action: "person-delete", storytellerId: goneTeller.id }, auth)).status, 200);
+    assert.equal(store.db.storytellers.some((x) => x.id === goneTeller.id), false);
+    assert.equal(store.db.answers.some((a) => a.storyteller_id === goneTeller.id), false);
+    assert.equal(store.db.parts.some((p) => p.storyteller_id === goneTeller.id), false);
+    assert.equal(store.db.media.some((m) => m.storyteller_id === goneTeller.id), false);
+    assert.equal([...store.files.keys()].some((k) => k.includes(goneTeller.id)), false, "recordings and photos are deleted");
+    assert.equal((await fetch(`${url}/api/teller?t=${gone.t}`)).status, 404, "the old link stops working");
+    assert.equal((await fetch(`${url}/api/teller?t=${keep.t}`)).status, 200, "other people are untouched");
+  } finally {
+    server.close();
+  }
+});

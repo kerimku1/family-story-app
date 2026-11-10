@@ -57,6 +57,9 @@ function supabaseStore() {
     async updateStoryteller(id, patch) {
       return must(await db.from("storytellers").update(patch).eq("id", id).select().single(), "update storyteller");
     },
+    async deleteStoryteller(id) {
+      must(await db.from("storytellers").delete().eq("id", id), "delete storyteller");
+    },
 
     async createAnswer(row) {
       return must(await db.from("answers").insert(row).select().single(), "create answer");
