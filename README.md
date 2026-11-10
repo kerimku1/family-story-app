@@ -1,16 +1,17 @@
 # Family Story
 
-A person tells their life story to their phone. Nobody hears the recordings. The server writes each answer into a story, collects the details of their life (people, places, years, objects, favourite phrases), and prepares a comic script. After the storyteller approves a story, a comic or animated film is made from it. The family sees **only** the finished comics and films.
+A family member picks **one main question** for someone close ("Who did you want to become as a child?"). That person opens a link and answers about **5 short lead-up questions** on their phone, by voice or by typing. Nobody hears the recordings. The server combines the answers into **one story** that answers the main question, collects the details of their life (people, places, years, objects, favourite phrases), and prepares a comic script. After the storyteller approves a story, a comic or animated film is made from it. The family sees **only** the finished comics and films.
 
 ## How it works
 
 ```
 Family member            Storyteller                    Server                         Studio (you)              Family
 ─────────────            ───────────                    ──────                         ────────────              ──────
-creates links  ───────►  opens link, answers by voice
-                         taps "Send"  ─────────────────► audio → private storage
-                                                         ElevenLabs: speech → text
-                                                         Claude: story, life card,
+picks who and   ──────►  opens link, answers ~5
+one question             lead-up questions
+(Claude writes                                           audio → private storage
+ the 5 lead-ups)                                         ElevenLabs: speech → text
+                         taps "Write my story"  ───────► Claude: one story, life card,
                                                          comic script + voice clips
                          reads story in "My stories"
                          taps "OK to use"  ───────────────────────────────────────►  sees script, makes
@@ -20,21 +21,24 @@ creates links  ───────►  opens link, answers by voice
 
 | Who | Page | Sees |
 | --- | --- | --- |
-| Family member who sets it up | `/` | Two links: one for the storyteller, one for the family |
-| Storyteller | `/?t=…` | Questions, record button, their own written stories, approve / hide / delete |
+| Family member who sets it up | `/` | Who is this person to you → 30 questions (or your own) → the 5 lead-up questions and two links |
+| Storyteller | `/?t=…` | The main question and its lead-up questions, record or type, their own written stories, approve / hide / delete |
 | Studio (you) | `/studio.html` | Approved stories, life card, comic script with voice-clip timings. Never recordings, never unapproved stories |
-| Family | `/family.html?f=…` | Finished comics and films only, plus how many stories were collected |
+| Family | `/family.html?f=…` | Finished comics and films; their questions and how far along each is (never the answers); "Ask another question" |
 
 ## Files
 
 | Path | What it is |
 | --- | --- |
 | `index.html`, `app.js` | Link creation and the storyteller's pages |
-| `questions.js` | All interface text and questions in Russian, Kazakh and English |
+| `questions.js` | All interface text in Russian, Kazakh and English |
+| `question-bank.js` | The 30 main questions for each relationship (parent, child, partner, friend), in 3 languages |
+| `chooser.js` | The "who is this person to you → pick a question" picker, used on the first page and the family page |
 | `family.html`, `family.js` | Family page |
 | `studio.html`, `studio.js`, `studio.css` | Production studio |
 | `styles.css` | Shared look: large text, big buttons, dark mode |
-| `api/create.js` | Creates a storyteller and their two secret links |
+| `api/create.js` | Creates a storyteller, their first question with its lead-up questions, and the two secret links |
+| `api/_lib/stories.js` | Adds a main question to a storyteller (Claude writes the lead-up questions) |
 | `api/teller.js` | Storyteller actions: upload, approve, delete, list own stories |
 | `api/family.js` | Family page data (finished media only) |
 | `api/studio.js` | Studio data and media uploads (password-protected) |
@@ -53,7 +57,7 @@ You need four accounts. Supabase and Vercel have free plans; ElevenLabs and Anth
 
 1. Go to supabase.com, sign up, and click **New project**. Choose a region close to your users and save the database password somewhere safe.
 2. When the project is ready, open **SQL Editor → New snippet**. Paste everything from `supabase/schema.sql` and click **Run**. You should see "Success".
-   - **Already set up before?** Instead, run the update files you haven't run yet, in order: `supabase/002_panels_and_voice.sql`, then `supabase/003_auto_comics.sql`.
+   - **Already set up before?** Instead, run the update files you haven't run yet, in order: `supabase/002_panels_and_voice.sql`, `supabase/003_auto_comics.sql`, then `supabase/004_story_parts.sql` (one main question + lead-up questions; your old answers are kept as one-part stories).
 3. Open **Project Settings → API Keys** (or **API**). Copy:
    - the **Project URL** → this is `SUPABASE_URL`
    - the **secret** key (older projects call it **service_role**) → this is `SUPABASE_SECRET_KEY`. Keep it secret; never put it in browser code.
@@ -78,8 +82,8 @@ You need four accounts. Supabase and Vercel have free plans; ElevenLabs and Anth
 
 ### 5. Check it works
 
-1. Open your Vercel address, create links for yourself, and open the storyteller link on your phone.
-2. Record one answer and tap **Send**. You should see "Saved".
+1. Open your Vercel address, choose who the person is and one question, and create the links. Open the storyteller link on your phone.
+2. Answer a lead-up question by voice or text and tap **Send**. You should see "Saved". Answer a few more, then tap **Write my story**.
 3. Wait about a minute and open **My stories**: your story should be written. Tap **OK to use**.
 4. Open `/studio.html`, enter your studio password. You should see the story and its comic script.
 5. Upload any image as a test and open the family link: the image appears there.
@@ -151,4 +155,4 @@ To run against real services: `npm i -g vercel`, then `vercel link` and `vercel 
 - AI interviewer: ask the follow-up questions the pipeline already writes ("What was the river called?").
 - Pre-record the questions in the asking child's own voice.
 - Translate captions for grandchildren who don't speak the storyteller's language, keeping the original voice.
-- Check every Kazakh text in `questions.js` with a native speaker.
+- Check every Kazakh text in `questions.js` and `question-bank.js` with a native speaker.

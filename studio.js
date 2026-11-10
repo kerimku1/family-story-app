@@ -95,12 +95,12 @@
     const ready = t.answers.filter(function (a) { return a.status === "ready"; }).length;
     const approved = t.answers.filter(function (a) { return a.approval === "approved"; }).length;
     return h("section", { class: "card" },
-      h("div", { class: "toolbar" }, h("h2", { text: t.name }), badge(t.lang)),
-      h("p", { class: "meta", text: "Asked by " + t.from + " · " + t.answers.length + " answers · " + ready + " written · " + approved + " approved" }),
+      h("div", { class: "toolbar" }, h("h2", { text: t.name }), badge(t.lang), t.relationship ? badge(t.relationship) : null),
+      h("p", { class: "meta", text: "Asked by " + t.from + " · " + t.answers.length + " questions · " + ready + " written · " + approved + " approved" }),
       h("div", { class: "toolbar" }, h("a", { class: "btn btn-secondary", href: familyUrl, target: "_blank", rel: "noopener" }, "Family page")),
       photosBlock(t),
       lifeCard(t.lifeCard),
-      t.answers.length ? h("div", null, t.answers.map(function (a) { return renderAnswer(t, a); })) : h("p", { class: "meta", text: "No answers yet." }),
+      t.answers.length ? h("div", null, t.answers.map(function (a) { return renderAnswer(t, a); })) : h("p", { class: "meta", text: "No questions yet." }),
       mediaBlock(t, null, t.media.filter(function (m) { return !m.answerId && (m.kind === "comic" || m.kind === "video"); }), "General media (not tied to one story)"));
   }
 
@@ -153,13 +153,18 @@
     const otherMedia = media.filter(function (m) { return m.kind === "comic" || m.kind === "video"; });
     const head = h("div", { class: "toolbar" },
       h("h3", { text: "Q" + (a.questionIndex + 1) + ". " + (a.title || a.question) }),
-      badge(a.status), badge(a.approval), a.typed ? badge("typed") : (a.allowVoice ? badge("voice allowed") : badge("no voice")),
+      badge(a.status), badge(a.approval), !(a.answeredParts || []).length ? null : a.typed ? badge("typed") : (a.allowVoice ? badge("voice allowed") : badge("no voice")),
       a.durationSec ? h("span", { class: "meta", text: a.durationSec + "s" }) : null,
       (a.status === "failed" || a.status === "ready") ? h("button", { class: "btn btn-quiet", type: "button", disabled: busy === a.id, onclick: function () { retry(a); } }, a.status === "failed" ? "Retry" : "Rewrite") : null);
     const parts = [head];
+    const steps = a.steps || [];
+    const done = new Set(a.answeredParts || []);
+    parts.push(h("details", null,
+      h("summary", null, "Lead-up questions: " + done.size + " of " + steps.length + " answered"),
+      h("ol", null, steps.map(function (q, i) { return h("li", { text: (done.has(i) ? "✓ " : "") + q }); }))));
     if (a.error) parts.push(h("p", { class: "meta", text: "Error: " + a.error }));
     if (a.approval !== "approved") {
-      parts.push(h("p", { class: "meta", text: a.status === "ready" ? "Waiting for the storyteller's approval." : "Not written yet." }));
+      parts.push(h("p", { class: "meta", text: a.status === "ready" ? "Waiting for the storyteller's approval." : a.status === "collecting" ? "The storyteller is still answering." : "Not written yet." }));
       return h("details", null, h("summary", null, head), parts.slice(1));
     }
     parts.push(h("details", null, h("summary", null, "Story"), h("p", { class: "story-text", text: a.story || "" })));

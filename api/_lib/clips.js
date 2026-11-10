@@ -64,7 +64,12 @@ export async function syncClips(store, answerId) {
     const script = answer && answer.comic_script;
     if (!script || !Array.isArray(script.panels)) return;
     const panels = script.panels.map((p) => ({ ...p }));
-    const wanted = Boolean(answer.allow_voice && answer.approval === "approved" && answer.audio_path);
+    // Recordings live in the story's parts; older panels (before parts) point at the first one.
+    const parts = await store.listParts(answer.id);
+    const partById = new Map(parts.map((p) => [p.id, p]));
+    const firstSpoken = parts.filter((p) => p.audio_path).sort((x, y) => x.part_index - y.part_index)[0] || null;
+    const recordingFor = (clip) => (clip.part_id ? partById.get(clip.part_id) : firstSpoken) || null;
+    const wanted = Boolean(answer.allow_voice && answer.approval === "approved" && parts.some((p) => p.audio_path));
     let changed = false;
 
     if (!wanted) {
@@ -77,13 +82,18 @@ export async function syncClips(store, answerId) {
     } else {
       const missing = panels.filter((p) => p.voice_clip && !p.clip_path);
       if (missing.length) {
-        const recording = Buffer.from(await (await store.download("recordings", answer.audio_path)).arrayBuffer());
+        const recordings = new Map();
         const stamp = Date.now();
         for (let i = 0; i < panels.length; i++) {
           const p = panels[i];
           if (!p.voice_clip || p.clip_path) continue;
+          const part = recordingFor(p.voice_clip);
+          if (!part || !part.audio_path) continue;
           try {
-            const clip = await cutClip(recording, p.voice_clip.start, p.voice_clip.end, extOf(answer.audio_path));
+            if (!recordings.has(part.id)) {
+              recordings.set(part.id, Buffer.from(await (await store.download("recordings", part.audio_path)).arrayBuffer()));
+            }
+            const clip = await cutClip(recordings.get(part.id), p.voice_clip.start, p.voice_clip.end, extOf(part.audio_path));
             const path = `${answer.storyteller_id}/clips/${answer.id}/${i}-${stamp}.m4a`;
             await store.upload("media", path, clip, "audio/mp4");
             p.clip_path = path;

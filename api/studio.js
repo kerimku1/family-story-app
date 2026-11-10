@@ -16,12 +16,14 @@ import { send, fail, readJson, isAdmin, cleanText, inBackground } from "./_lib/h
 import { processAnswer, mergeLifeCard } from "./_lib/pipeline.js";
 import { generateComic } from "./_lib/comic.js";
 import { env } from "./_lib/store.js";
+import { storyProgress } from "./_lib/stories.js";
 
 export const config = { maxDuration: 300 };
 
 const MEDIA_EXT = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "video/mp4": "mp4", "video/webm": "webm" };
 
-function answerForStudio(a) {
+function answerForStudio(a, parts) {
+  const progress = storyProgress(a, parts);
   const approved = a.approval === "approved";
   return {
     id: a.id,
@@ -31,7 +33,9 @@ function answerForStudio(a) {
     error: a.error,
     approval: a.approval,
     durationSec: a.duration_sec,
-    typed: !a.audio_path,
+    typed: !progress.spoken,
+    steps: progress.steps,
+    answeredParts: progress.answeredParts,
     allowVoice: Boolean(a.allow_voice),
     comicStatus: a.comic_status || null,
     comicError: a.comic_error || null,
@@ -58,6 +62,7 @@ export default async function handler(req, res) {
       const out = [];
       for (const t of tellers) {
         const answers = await store.listAnswers(t.id);
+        const parts = await store.listPartsForStoryteller(t.id);
         const media = await store.listMedia(t.id);
         const mediaOut = [];
         for (const m of media) {
@@ -77,7 +82,8 @@ export default async function handler(req, res) {
           lifeCard: answers
             .filter((a) => a.approval === "approved" && a.details)
             .reduce((card, a) => mergeLifeCard(card, a.details), {}),
-          answers: answers.filter((a) => a.status !== "pending").map(answerForStudio),
+          relationship: t.relationship || null,
+          answers: answers.filter((a) => a.status !== "pending").map((a) => answerForStudio(a, parts)),
           media: mediaOut
         });
       }
@@ -90,7 +96,8 @@ export default async function handler(req, res) {
     if (body.action === "retry") {
       const answer = await store.answerById(String(body.answerId || ""));
       if (!answer) return fail(res, 404, "Answer not found");
-      if (answer.status === "pending" || (!answer.audio_path && !answer.transcript)) return fail(res, 400, "Nothing uploaded yet");
+      const answered = (await store.listParts(answer.id)).filter((p) => p.status !== "pending");
+      if (!answered.length) return fail(res, 400, "Nothing answered yet");
       await store.updateAnswer(answer.id, { status: "uploaded", error: null });
       await inBackground(processAnswer(store, answer.id));
       return send(res, 200, { ok: true });

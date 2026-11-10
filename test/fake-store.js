@@ -4,9 +4,11 @@ import { randomUUID } from "node:crypto";
 const clone = (v) => (v === undefined || v === null ? null : structuredClone(v));
 
 export function createFakeStore(baseUrl = "http://localhost") {
-  const db = { storytellers: [], answers: [], media: [] };
+  const db = { storytellers: [], answers: [], media: [], parts: [] };
   const files = new Map();
-  const now = () => new Date().toISOString();
+  // Strictly increasing times, so "newest" is always well defined (like a real database).
+  let lastMs = 0;
+  const now = () => { lastMs = Math.max(Date.now(), lastMs + 1); return new Date(lastMs).toISOString(); };
   const insert = (table, row) => {
     const r = { id: randomUUID(), created_at: now(), ...row };
     db[table].push(r);
@@ -36,7 +38,14 @@ export function createFakeStore(baseUrl = "http://localhost") {
     async answerById(id) { return clone(db.answers.find((r) => r.id === id)); },
     async listAnswers(sid) { return clone(db.answers.filter((r) => r.storyteller_id === sid).sort(byCreated)); },
     async updateAnswer(id, patch) { return update("answers", id, patch); },
-    async deleteAnswer(id) { remove("answers", id); },
+    async deleteAnswer(id) { remove("answers", id); db.parts = db.parts.filter((r) => r.answer_id !== id); },
+
+    async createPart(row) { return insert("parts", row); },
+    async partById(id) { return clone(db.parts.find((r) => r.id === id)); },
+    async listParts(aid) { return clone(db.parts.filter((r) => r.answer_id === aid).sort(byCreated)); },
+    async listPartsForStoryteller(sid) { return clone(db.parts.filter((r) => r.storyteller_id === sid).sort(byCreated)); },
+    async updatePart(id, patch) { return update("parts", id, patch); },
+    async deletePart(id) { remove("parts", id); },
 
     async createMedia(row) { return insert("media", row); },
     async listMediaForAnswer(aid) { return clone(db.media.filter((r) => r.answer_id === aid).sort(byCreated)); },
@@ -60,6 +69,14 @@ export function createFakeStore(baseUrl = "http://localhost") {
 // Fake replies from ElevenLabs and Claude, so the whole pipeline runs without real keys.
 export const SAMPLE_TRANSCRIPT = "Я родилась в ауле у реки, у нас был белый дом с синими ставнями. Мама пекла баурсаки каждое воскресенье.";
 
+export const SAMPLE_STEPS = [
+  "Каким вы были ребёнком?",
+  "О ком или о чём вы мечтали тогда?",
+  "Почему именно об этом?",
+  "Что помогло или помешало мечте?",
+  "Что вы думаете об этой мечте сейчас?"
+];
+
 export function sampleStory() {
   return {
     title: "Белый дом у реки",
@@ -77,8 +94,8 @@ export function sampleStory() {
       style_notes: "Rural Kazakhstan village by a river, warm Sunday morning",
       characters: [{ name: "Narrator as a girl", look: "young girl, not described further", is_storyteller: true }, { name: "Mama", look: "not described", is_storyteller: false }],
       panels: [
-        { setting: "Village by a river", action: "A white house with blue shutters", caption: "Дом у реки", quote: "у нас был белый дом с синими ставнями" },
-        { setting: "Kitchen, Sunday", action: "Mother frying baursaks", caption: "Воскресенье", quote: "Мама пекла баурсаки каждое воскресенье" }
+        { setting: "Village by a river", action: "A white house with blue shutters", caption: "Дом у реки", quote: "у нас был белый дом с синими ставнями", quote_answer: 1 },
+        { setting: "Kitchen, Sunday", action: "Mother frying baursaks", caption: "Воскресенье", quote: "Мама пекла баурсаки каждое воскресенье", quote_answer: 1 }
       ]
     },
     follow_up_questions: ["Как называлась река?"]
@@ -107,8 +124,13 @@ export function installFakeApis(log = []) {
       return Response.json({ candidates: [{ finishReason: "STOP", content: { role: "model", parts: [{ text: "here" }, { inlineData: { mimeType: "image/png", data: png.toString("base64") } }] } }] });
     }
     if (url.startsWith("https://api.anthropic.com/")) {
-      log.push({ service: "anthropic", url, init, body: JSON.parse(init.body) });
-      return Response.json({ stop_reason: "end_turn", content: [{ type: "text", text: JSON.stringify(sampleStory()) }] });
+      const body = JSON.parse(init.body);
+      log.push({ service: "anthropic", url, init, body });
+      // Two kinds of request: the ~5 lead-up questions, or the story itself.
+      const steps = Boolean(body.output_config?.format?.schema?.properties?.questions);
+      if (steps && globalThis.__CLAUDE_STEPS_FAIL__) return Response.json({ error: { message: "overloaded" } }, { status: 529 });
+      const reply = steps ? { questions: SAMPLE_STEPS } : sampleStory();
+      return Response.json({ stop_reason: "end_turn", content: [{ type: "text", text: JSON.stringify(reply) }] });
     }
     return realFetch(input, init);
   };

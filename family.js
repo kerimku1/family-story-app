@@ -1,4 +1,5 @@
 // Family page: finished comics and films only. Never story text or full recordings.
+// It also lists the questions asked (with progress) and lets the family ask one more.
 // A comic is a set of panels; captions are drawn by the app (always spelled right),
 // and a short real-voice clip plays for a panel when the storyteller allowed it.
 (function () {
@@ -19,6 +20,8 @@
   // What is playing: { comic, panel, all }
   let playing = null;
   let restTimer = 0;
+  // "Ask another question": { open, sel, sending, notice, added: {main, steps}, copied }
+  const ask = { open: false, sel: { relationship: null, key: null, custom: "", showAll: false }, sending: false, notice: null, added: null, copied: false };
 
   function add() {
     Array.prototype.slice.call(arguments).flat(Infinity).forEach(function (n) { if (n) app.append(n); });
@@ -116,6 +119,8 @@
       h("p", { class: "lead", text: t.familyLead }),
       h("p", { class: "small", text: t.collected(data.collected) }));
 
+    add(renderAsked(t));
+
     if (!data.comics.length && !data.media.length) {
       add(h("div", { class: "card empty" }, h("span", { class: "icon", svg: ICON_FILM }), h("p", { text: t.familyEmpty })));
       return;
@@ -155,6 +160,97 @@
               }
             }, icon(ICON_VOICE), t.playPanel) : null));
       })));
+  }
+
+  // ---------- The asker's questions and "ask another" ----------
+  function stageText(t, q) {
+    if (q.stage === "answering") return t.stageAnswering(q.answered, q.total);
+    if (q.stage === "writing") return t.stageWriting;
+    if (q.stage === "reviewing") return t.stageReviewing;
+    if (q.stage === "approved") return t.stageApproved;
+    return t.stagePrivate;
+  }
+
+  function renderAsked(t) {
+    const asked = data.asked || [];
+    const qlang = I18N[data.lang] ? data.lang : "ru";
+    const parts = [h("h2", { text: t.askedTitle })];
+    if (asked.length) {
+      parts.push(h("ul", { class: "asked-list" }, asked.map(function (q) {
+        return h("li", null, h("span", { class: "asked-main", text: q.main }), h("span", { class: "small", text: stageText(t, q) }));
+      })));
+    }
+    if (ask.added) {
+      const linkUi = I18N[qlang].ui;
+      const msg = linkUi.shareMsg(data.name, ask.added.main);
+      parts.push(
+        h("div", { class: "notice good", role: "status", text: t.askAdded }),
+        h("p", { class: "small", text: t.stepsPreview(data.name) }),
+        h("ol", { class: "steps-preview" }, ask.added.steps.map(function (s) { return h("li", { text: s }); })));
+      parts.push(
+        h("p", { class: "small", text: t.tellerLink }),
+        h("div", { class: "link-box", text: data.tellerUrl }),
+        h("a", { class: "btn btn-primary", href: "https://wa.me/?text=" + encodeURIComponent(msg + " " + data.tellerUrl), target: "_blank", rel: "noopener" }, t.shareWa),
+        h("a", { class: "btn btn-secondary", href: "https://t.me/share/url?url=" + encodeURIComponent(data.tellerUrl) + "&text=" + encodeURIComponent(msg), target: "_blank", rel: "noopener" }, t.shareTg),
+        h("button", { class: "btn btn-quiet", type: "button", onclick: copyLink }, ask.copied ? t.copied : t.copy));
+    }
+    if (ask.open) {
+      parts.push(window.Chooser.build(h, t, qlang, ask.sel, function (patch) {
+        Object.assign(ask.sel, patch);
+        ask.notice = null;
+        render();
+      }, { fixedRelationship: Boolean(data.relationship), hideKeys: asked.map(function (q) { return q.key; }).filter(Boolean) }));
+      if (ask.notice) parts.push(h("div", { class: "notice bad", role: "alert", text: ask.notice }));
+      parts.push(
+        h("button", { class: "btn btn-primary", type: "button", disabled: ask.sending, onclick: sendAsk }, ask.sending ? t.preparing : t.askSend),
+        h("button", { class: "btn btn-quiet", type: "button", disabled: ask.sending, onclick: function () { ask.open = false; ask.notice = null; render(); } }, t.cancel));
+    } else {
+      parts.push(h("button", { class: "btn btn-secondary", type: "button", onclick: openAsk }, t.askAnother));
+    }
+    return h("section", { class: "card asked" }, parts);
+  }
+
+  function openAsk() {
+    ask.open = true;
+    ask.added = null;
+    ask.notice = null;
+    ask.sel = { relationship: data.relationship || null, key: null, custom: "", showAll: false };
+    render();
+  }
+
+  async function sendAsk() {
+    const t = I18N[lang].ui;
+    const qlang = I18N[data.lang] ? data.lang : "ru";
+    if (!ask.sel.relationship) { ask.notice = t.needRelationship; return render(); }
+    const mainQuestion = window.Chooser.mainText(ask.sel, qlang);
+    if (!mainQuestion) { ask.notice = t.needQuestion; return render(); }
+    ask.sending = true;
+    ask.notice = null;
+    render();
+    try {
+      const res = await fetch("/api/family", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ f: token, action: "ask", mainKey: ask.sel.key, mainQuestion: mainQuestion, relationship: ask.sel.relationship })
+      });
+      const body = await res.json().catch(function () { return null; });
+      if (!res.ok || !body) throw new Error("ask failed");
+      ask.added = { main: body.mainQuestion, steps: body.steps || [] };
+      ask.open = false;
+      ask.copied = false;
+      if (!data.relationship) data.relationship = ask.sel.relationship;
+      data.asked = (data.asked || []).concat({ main: body.mainQuestion, key: ask.sel.key === "custom" ? null : ask.sel.key, answered: 0, total: (body.steps || []).length, stage: "answering" });
+    } catch (e) {
+      ask.notice = t.createFail;
+    }
+    ask.sending = false;
+    render();
+  }
+
+  async function copyLink() {
+    try { await navigator.clipboard.writeText(data.tellerUrl); } catch (e) { /* the link is shown on the page */ }
+    ask.copied = true;
+    render();
   }
 
   async function load() {

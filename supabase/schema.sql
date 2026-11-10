@@ -1,4 +1,4 @@
--- Family Story: database and private storage (includes updates 002 and 003).
+-- Family Story: database and private storage (includes updates 002, 003 and 004).
 -- Run once in Supabase: Dashboard → SQL Editor → New query → paste → Run.
 
 create extension if not exists pgcrypto;
@@ -9,18 +9,21 @@ create table if not exists storytellers (
   name text not null,                    -- how the family calls them, e.g. "Мама"
   from_name text not null,               -- who asked, e.g. "Мухамед"
   lang text not null default 'ru',       -- ru | kk | en
+  relationship text,                     -- who they are to the asker: parent | child | partner | friend
   teller_token text unique not null,     -- secret link for the storyteller
   family_token text unique not null,     -- secret link for the family page
   life_card jsonb not null default '{}'::jsonb,  -- people, places, years, objects, phrases...
   created_at timestamptz not null default now()
 );
 
--- One row per recorded answer.
+-- One row per story: one main question, answered in ~5 parts (see "parts").
 create table if not exists answers (
   id uuid primary key default gen_random_uuid(),
   storyteller_id uuid not null references storytellers(id) on delete cascade,
   question_index int not null,
-  question_text text not null,
+  question_text text not null,            -- the main question
+  main_key text,                          -- id from the question bank, or 'custom'
+  sub_questions jsonb,                    -- the ~5 lead-up questions
   audio_path text,                       -- path in the private "recordings" bucket
   mime text,
   duration_sec numeric,
@@ -42,6 +45,25 @@ create table if not exists answers (
   updated_at timestamptz not null default now()
 );
 create index if not exists answers_storyteller_idx on answers (storyteller_id, created_at);
+
+-- The storyteller's answer to each lead-up question.
+create table if not exists parts (
+  id uuid primary key default gen_random_uuid(),
+  answer_id uuid not null references answers(id) on delete cascade,
+  storyteller_id uuid not null references storytellers(id) on delete cascade,
+  part_index int not null,
+  question_text text not null,
+  audio_path text,                       -- private recording (null for a typed answer)
+  mime text,
+  duration_sec numeric,
+  transcript text,                       -- what they said, or what they typed
+  words jsonb,                           -- word timings, for real-voice clips
+  status text not null default 'pending', -- pending | uploaded | ready | failed
+  error text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists parts_answer_idx on parts (answer_id, part_index, created_at);
 
 -- Comics, videos and drawing references. The family sees only published comics and videos;
 -- 'photo' (real photos of the storyteller) and 'sheet' (AI character sheets) are never shown to them.
@@ -65,6 +87,7 @@ create index if not exists media_answer_idx on media (answer_id, panel_index);
 alter table storytellers enable row level security;
 alter table answers enable row level security;
 alter table media enable row level security;
+alter table parts enable row level security;
 
 -- Private buckets: files are reachable only through short-lived links made by the server.
 insert into storage.buckets (id, name, public)

@@ -1,5 +1,5 @@
-// What happens after an answer is uploaded:
-// audio → transcript with word timings → story + details + comic script → life card.
+// What happens after a story's parts are in:
+// each recording → transcript with word timings; all parts → one story + details + comic script → life card.
 import { transcribe, writeStory } from "./ai.js";
 import { syncClips, clipPaths } from "./clips.js";
 import { generateComic, autoComicsOn } from "./comic.js";
@@ -59,6 +59,33 @@ export function findClip(words, quote) {
   };
 }
 
+// The newest answer for each lead-up question (re-recording replaces the older one).
+export function latestParts(parts) {
+  const byIndex = new Map();
+  for (const p of parts || []) {
+    if (p.status === "pending") continue;
+    const old = byIndex.get(p.part_index);
+    if (!old || old.created_at <= p.created_at) byIndex.set(p.part_index, p);
+  }
+  return [...byIndex.values()].sort((a, b) => a.part_index - b.part_index);
+}
+
+// Turn one recorded part into text (typed parts already are text).
+export async function transcribePart(store, partId, { fetchImpl = fetch } = {}) {
+  const part = await store.partById(partId);
+  if (!part || part.transcript || !part.audio_path) return part;
+  try {
+    const teller = await store.storytellerById(part.storyteller_id);
+    const audio = await store.download("recordings", part.audio_path);
+    const heard = await transcribe(audio, { lang: teller.lang, mime: part.mime, fetchImpl });
+    return await store.updatePart(partId, { transcript: heard.text, words: heard.words, status: "ready", error: heard.text ? null : "No speech found" });
+  } catch (err) {
+    console.error("transcribePart failed", partId, err);
+    return await store.updatePart(partId, { status: "failed", error: String(err.message || err).slice(0, 300) });
+  }
+}
+
+// Combine all parts of a story into one story, a comic script and life-card details.
 export async function processAnswer(store, answerId, { fetchImpl = fetch } = {}) {
   let answer = await store.answerById(answerId);
   if (!answer) return;
@@ -66,32 +93,37 @@ export async function processAnswer(store, answerId, { fetchImpl = fetch } = {})
     const teller = await store.storytellerById(answer.storyteller_id);
     answer = await store.updateAnswer(answerId, { status: "processing", error: null });
 
-    const typed = !answer.audio_path;
-    let heard;
-    if (typed) {
-      // A typed answer: the text is already here, nothing to transcribe.
-      if (!answer.transcript) throw new Error("The answer is empty");
-      heard = { text: answer.transcript, words: [] };
-    } else {
-      const audio = await store.download("recordings", answer.audio_path);
-      heard = await transcribe(audio, { lang: teller.lang, mime: answer.mime, fetchImpl });
-      if (!heard.text) throw new Error("No speech was found in the recording");
-      await store.updateAnswer(answerId, { transcript: heard.text, words: heard.words });
+    let parts = latestParts(await store.listParts(answerId));
+    for (const p of parts) {
+      if (p.audio_path && !p.transcript) await transcribePart(store, p.id, { fetchImpl });
     }
+    parts = latestParts(await store.listParts(answerId)).filter((p) => p.transcript && p.transcript.trim());
+    if (!parts.length) throw new Error("No answers with words in them yet");
 
     const written = await writeStory({
       name: teller.name,
       lang: teller.lang,
+      relationship: teller.relationship,
       question: answer.question_text,
-      transcript: heard.text,
-      lifeCard: teller.life_card,
-      typed
+      parts: parts.map((p) => ({ question: p.question_text, text: p.transcript, spoken: Boolean(p.audio_path) })),
+      lifeCard: teller.life_card
     }, { fetchImpl });
 
-    const panels = (written.comic?.panels || []).map((p) => ({ ...p, voice_clip: findClip(heard.words, p.quote) }));
+    // Find where each panel's quote was spoken: first in the answer the writer named, then in any other.
+    const panels = (written.comic?.panels || []).map((p) => {
+      const named = parts[Number(p.quote_answer) - 1];
+      const order = named ? [named, ...parts.filter((x) => x !== named)] : parts;
+      for (const part of order) {
+        if (!part.audio_path) continue;
+        const clip = findClip(part.words, p.quote);
+        if (clip) return { ...p, voice_clip: { ...clip, part_id: part.id } };
+      }
+      return { ...p, voice_clip: null };
+    });
     const oldClips = clipPaths(answer);
     await store.updateAnswer(answerId, {
       status: "ready",
+      transcript: parts.map((p) => p.transcript).join("\n\n"),
       title: written.title,
       story: written.story,
       details: written.details,
@@ -99,7 +131,7 @@ export async function processAnswer(store, answerId, { fetchImpl = fetch } = {})
       follow_up_questions: written.follow_up_questions || []
     });
 
-    // Re-read the storyteller so two answers finishing together don't overwrite each other's details.
+    // Re-read the storyteller so two stories finishing together don't overwrite each other's details.
     const fresh = await store.storytellerById(teller.id);
     await store.updateStoryteller(teller.id, { life_card: mergeLifeCard(fresh.life_card, written.details) });
 

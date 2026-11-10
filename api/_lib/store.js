@@ -78,6 +78,31 @@ function supabaseStore() {
       must(await db.from("answers").delete().eq("id", id), "delete answer");
     },
 
+    async createPart(row) {
+      return must(await db.from("parts").insert(row).select().single(), "create part");
+    },
+    async partById(id) {
+      return must(await db.from("parts").select("*").eq("id", id).maybeSingle(), "find part");
+    },
+    async listParts(answerId) {
+      return must(
+        await db.from("parts").select("*").eq("answer_id", answerId).order("created_at", { ascending: true }),
+        "list parts");
+    },
+    async listPartsForStoryteller(storytellerId) {
+      return must(
+        await db.from("parts").select("*").eq("storyteller_id", storytellerId).order("created_at", { ascending: true }),
+        "list parts");
+    },
+    async updatePart(id, patch) {
+      return must(
+        await db.from("parts").update({ ...patch, updated_at: new Date().toISOString() }).eq("id", id).select().single(),
+        "update part");
+    },
+    async deletePart(id) {
+      must(await db.from("parts").delete().eq("id", id), "delete part");
+    },
+
     async createMedia(row) {
       return must(await db.from("media").insert(row).select().single(), "create media");
     },

@@ -1,9 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { findClip, mergeLifeCard } from "../api/_lib/pipeline.js";
-import { STORY_SCHEMA } from "../api/_lib/ai.js";
+import { STORY_SCHEMA, STEPS_SCHEMA, fallbackSteps } from "../api/_lib/ai.js";
 import { normalizeSupabaseUrl } from "../api/_lib/store.js";
 import { startTestServer } from "./test-server.js";
+import { SAMPLE_STEPS } from "./fake-store.js";
 
 test("findClip locates the quoted words and their times", () => {
   const words = "Я родилась в ауле у реки у нас был белый дом".split(" ").map((w, i) => ({ text: w, start: i, end: i + 0.5 }));
@@ -38,102 +39,208 @@ test("story schema follows structured-output rules", () => {
   })(STORY_SCHEMA, "root");
 });
 
-test("full flow: create → upload → story → approve → studio → family sees only media", async () => {
+
+// Small helpers shared by the end-to-end tests.
+function client(url) {
+  const post = (path, body, headers = {}) => fetch(url + path, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) })
+    .then(async (r) => ({ status: r.status, body: await r.json() }));
+  const get = (path, headers = {}) => fetch(url + path, { headers }).then((r) => r.json());
+  const waitFor = async (check, tries = 200) => { for (let i = 0; i < tries && !(await check()); i++) await new Promise((r) => setTimeout(r, 30)); };
+  const tokens = (created) => ({ t: new URL(created.tellerUrl).searchParams.get("t"), f: new URL(created.familyUrl).searchParams.get("f") });
+  const latestStory = async (t) => { const v = await get(`/api/teller?t=${t}`); return v.stories[v.stories.length - 1]; };
+  return { post, get, waitFor, tokens, latestStory };
+}
+const DREAM = { relationship: "parent", mainKey: "p01", mainQuestion: "Кем вы мечтали стать в детстве?" };
+
+test("lead-up questions schema follows structured-output rules", () => {
+  assert.equal(STEPS_SCHEMA.additionalProperties, false);
+  assert.deepEqual(STEPS_SCHEMA.required, Object.keys(STEPS_SCHEMA.properties));
+  for (const lang of ["ru", "kk", "en"]) {
+    assert.equal(fallbackSteps(lang, "parent").length, 5);
+    assert.equal(fallbackSteps(lang, "friend").length, 5);
+  }
+  assert.match(fallbackSteps("ru", "parent").join(" "), /вы|Вы/);
+});
+
+test("full flow: choose a question → answer the lead-up questions → one story → approve → family sees only media", async () => {
   const { server, store, apiLog, url } = await startTestServer(8799);
+  const { post, get, waitFor, tokens } = client(url);
   try {
-    const post = (path, body, headers = {}) => fetch(url + path, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) }).then(async (r) => ({ status: r.status, body: await r.json() }));
-    const created = await post("/api/create", { from: "Мухамед", name: "Мама", lang: "ru" });
+    // The asker must say who the person is and pick a question.
+    assert.equal((await post("/api/create", { from: "Мухамед", name: "Мама", lang: "ru", mainKey: "p01", mainQuestion: "Q" })).status, 400);
+    assert.equal((await post("/api/create", { from: "Мухамед", name: "Мама", lang: "ru", relationship: "parent" })).status, 400);
+
+    const created = await post("/api/create", { from: "Мухамед", name: "Мама", lang: "ru", ...DREAM });
     assert.equal(created.status, 200);
-    const t = new URL(created.body.tellerUrl).searchParams.get("t");
-    const f = new URL(created.body.familyUrl).searchParams.get("f");
+    assert.equal(created.body.mainQuestion, DREAM.mainQuestion);
+    assert.deepEqual(created.body.steps, SAMPLE_STEPS, "the asker sees the lead-up questions");
+    const stepsCall = apiLog.find((c) => c.service === "anthropic");
+    assert.match(stepsCall.body.messages[0].content, /Кем вы мечтали стать в детстве/);
+    const { t, f } = tokens(created.body);
+    assert.equal(store.db.storytellers[0].relationship, "parent");
 
-    const slot = await post("/api/teller", { t, action: "upload-url", questionIndex: 0, questionText: "Где вы родились?", mime: "audio/webm" });
+    let view = await get(`/api/teller?t=${t}`);
+    assert.equal(view.stories.length, 1);
+    const story = view.stories[0];
+    assert.equal(story.main, DREAM.mainQuestion);
+    assert.equal(story.status, "collecting");
+    assert.deepEqual(story.steps, SAMPLE_STEPS);
+    assert.deepEqual(story.answeredParts, []);
+
+    // Part 1 by voice.
+    assert.equal((await post("/api/teller", { t, action: "upload-url", answerId: story.id, partIndex: 9, mime: "audio/webm" })).status, 400);
+    const slot = await post("/api/teller", { t, action: "upload-url", answerId: story.id, partIndex: 0, mime: "audio/webm" });
     assert.equal(slot.status, 200);
-    const put = await fetch(slot.body.uploadUrl, { method: "PUT", headers: { "content-type": "audio/webm" }, body: new Uint8Array([1, 2, 3]) });
-    assert.equal(put.status, 200);
-    assert.equal((await post("/api/teller", { t, action: "uploaded", answerId: slot.body.answerId, durationSec: 12.4 })).status, 200);
+    assert.equal((await fetch(slot.body.uploadUrl, { method: "PUT", headers: { "content-type": "audio/webm" }, body: new Uint8Array([1, 2, 3]) })).status, 200);
+    assert.equal((await post("/api/teller", { t, action: "uploaded", partId: slot.body.partId, durationSec: 12.4 })).status, 200);
+    await waitFor(() => store.db.parts.find((p) => p.id === slot.body.partId)?.status === "ready");
+    assert.equal(store.db.parts.find((p) => p.id === slot.body.partId).transcript.includes("ставнями"), true);
 
-    // wait for background processing
-    for (let i = 0; i < 50 && store.db.answers[0].status !== "ready"; i++) await new Promise((r) => setTimeout(r, 20));
+    // Part 3 typed, then typed again: only the newest answer is kept.
+    await post("/api/teller", { t, action: "text-answer", answerId: story.id, partIndex: 2, text: "Первый вариант" });
+    await post("/api/teller", { t, action: "text-answer", answerId: story.id, partIndex: 2, text: "Хотела стать врачом, как тётя." });
+    assert.equal(store.db.parts.filter((p) => p.part_index === 2).length, 1);
+    view = await get(`/api/teller?t=${t}`);
+    assert.deepEqual(view.stories[0].answeredParts, [0, 2]);
+
+    // Family sees its question and progress, never the answers.
+    let fam = await get(`/api/family?f=${f}`);
+    assert.deepEqual(fam.asked, [{ main: DREAM.mainQuestion, key: "p01", answered: 2, total: 5, stage: "answering" }]);
+    assert.equal(fam.relationship, "parent");
+    assert.equal(JSON.stringify(fam).includes("врачом"), false);
+    assert.equal(fam.tellerUrl, created.body.tellerUrl);
+
+    // "Write my story": one story from both answers.
+    assert.equal((await post("/api/teller", { t, action: "finish", answerId: story.id })).status, 200);
+    await waitFor(() => store.db.answers[0].status === "ready");
     const answer = store.db.answers[0];
     assert.equal(answer.status, "ready", answer.error || "");
     assert.equal(answer.title, "Белый дом у реки");
-    assert.ok(answer.comic_script.panels[0].voice_clip, "panel 1 should have a voice clip");
+    const storyCall = apiLog.filter((c) => c.service === "anthropic").at(-1);
+    assert.ok(storyCall.body.output_config.format.schema.properties.comic);
+    const prompt = storyCall.body.messages[0].content;
+    assert.match(prompt, /Кем вы мечтали стать в детстве/);
+    assert.match(prompt, /Answer 1 \(spoken/);
+    assert.match(prompt, /Answer 2 \(written/);
+    assert.match(prompt, /белый дом с синими ставнями/);
+    assert.match(prompt, /врачом, как тётя/);
+    assert.doesNotMatch(prompt, /Первый вариант/, "replaced answers are not used");
+    assert.equal(answer.comic_script.panels[0].voice_clip.part_id, slot.body.partId, "clip found in the spoken part");
     assert.equal(store.db.storytellers[0].life_card.people[0].name, "Мама");
 
-    const claudeCall = apiLog.find((c) => c.service === "anthropic");
-    assert.ok(claudeCall.body.output_config.format.schema);
-    assert.match(claudeCall.body.messages[0].content, /белый дом с синими ставнями/);
+    // Once written, the answers are locked.
+    assert.equal((await post("/api/teller", { t, action: "text-answer", answerId: story.id, partIndex: 1, text: "Ещё" })).status, 409);
+    fam = await get(`/api/family?f=${f}`);
+    assert.equal(fam.asked[0].stage, "reviewing");
+    assert.equal(fam.collected, 1);
+    assert.equal(JSON.stringify(fam).includes("ставнями"), false, "family must never get story text");
 
-    // Storyteller sees their story; family sees nothing yet; studio sees nothing until approved.
-    const teller = await (await fetch(`${url}/api/teller?t=${t}`)).json();
+    const teller = await get(`/api/teller?t=${t}`);
     assert.equal(teller.stories[0].story.includes("синими ставнями"), true);
-    const family1 = await (await fetch(`${url}/api/family?f=${f}`)).json();
-    assert.equal(family1.collected, 1);
-    assert.deepEqual(family1.media, []);
-    assert.equal(JSON.stringify(family1).includes("ставнями"), false, "family must never get story text");
+    assert.equal(teller.stories[0].typed, false);
 
     const auth = { authorization: "Bearer " + process.env.STUDIO_PASSWORD };
     assert.equal((await fetch(`${url}/api/studio`)).status, 401);
-    let studio = await (await fetch(`${url}/api/studio`, { headers: auth })).json();
+    let studio = await get("/api/studio", auth);
     assert.equal(studio.storytellers[0].answers[0].story, null, "studio must not see unapproved story");
+    assert.deepEqual(studio.storytellers[0].answers[0].answeredParts, [0, 2]);
     assert.equal(JSON.stringify(studio).includes("ставнями"), false);
+    assert.equal(JSON.stringify(studio).includes("врачом"), false);
     const blocked = await post("/api/studio", { action: "media-upload-url", storytellerId: answer.storyteller_id, answerId: answer.id, kind: "comic", mime: "image/png" }, auth);
     assert.equal(blocked.status, 400);
 
     assert.equal((await post("/api/teller", { t, action: "approve", answerId: answer.id, approval: "approved" })).status, 200);
-    studio = await (await fetch(`${url}/api/studio`, { headers: auth })).json();
+    studio = await get("/api/studio", auth);
     assert.ok(studio.storytellers[0].answers[0].comicScript.panels.length >= 1);
-    assert.equal(studio.storytellers[0].lifeCard.people[0].name, "Мама");
     assert.equal(JSON.stringify(studio).includes("audio_path"), false, "studio never gets recordings");
 
     const m = await post("/api/studio", { action: "media-upload-url", storytellerId: answer.storyteller_id, answerId: answer.id, kind: "comic", mime: "image/png", title: "Дом у реки" }, auth);
     assert.equal(m.status, 200);
     await fetch(m.body.uploadUrl, { method: "PUT", headers: { "content-type": "image/png" }, body: new Uint8Array([137, 80, 78, 71]) });
     assert.equal((await post("/api/studio", { action: "media-publish", mediaId: m.body.mediaId }, auth)).status, 200);
+    fam = await get(`/api/family?f=${f}`);
+    assert.equal(fam.media.length, 1);
+    assert.equal(fam.asked[0].stage, "approved");
 
-    const family2 = await (await fetch(`${url}/api/family?f=${f}`)).json();
-    assert.equal(family2.media.length, 1);
-    assert.equal(family2.media[0].title, "Дом у реки");
-
-    // Wrong tokens and other people's answers are rejected.
+    // Wrong tokens and other people's stories are rejected.
     assert.equal((await fetch(`${url}/api/teller?t=nope`)).status, 404);
-    const other = await post("/api/create", { from: "A", name: "B", lang: "kk" });
-    const t2 = new URL(other.body.tellerUrl).searchParams.get("t");
+    const other = await post("/api/create", { from: "A", name: "B", lang: "kk", relationship: "friend", mainKey: "f01", mainQuestion: "Q?" });
+    const t2 = tokens(other.body).t;
     assert.equal((await post("/api/teller", { t: t2, action: "delete", answerId: answer.id })).status, 404);
+    assert.equal((await post("/api/teller", { t: t2, action: "uploaded", partId: slot.body.partId })).status, 404);
 
-    // Deleting removes the recording file too.
+    // Deleting removes the recordings and the parts too.
     assert.equal((await post("/api/teller", { t, action: "delete", answerId: answer.id })).status, 200);
     assert.equal([...store.files.keys()].some((k) => k.startsWith("recordings/")), false);
+    assert.equal(store.db.parts.filter((p) => p.answer_id === answer.id).length, 0);
   } finally {
     server.close();
   }
 });
 
-test("typed answer: no transcription, story written from the text", async () => {
+test("typed story with your own question: no transcription, written in Kazakh from the text", async () => {
   const { server, store, apiLog, url } = await startTestServer(8798);
+  const { post, waitFor, tokens, latestStory } = client(url);
   try {
-    const post = (body) => fetch(url + "/api/teller", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then(async (r) => ({ status: r.status, body: await r.json() }));
-    const created = await fetch(url + "/api/create", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ from: "Мухамед", name: "Ата", lang: "kk" }) }).then((r) => r.json());
-    const t = new URL(created.tellerUrl).searchParams.get("t");
+    const created = await post("/api/create", { from: "Мухамед", name: "Ата", lang: "kk", relationship: "parent", mainKey: "<script>", mainQuestion: "  Сіз неден қорқатын едіңіз?  " });
+    assert.equal(created.status, 200);
+    assert.equal(created.body.mainQuestion, "Сіз неден қорқатын едіңіз?");
+    assert.equal(store.db.answers[0].main_key, "custom");
+    const { t } = tokens(created.body);
+    const s = await latestStory(t);
 
-    assert.equal((await post({ t, action: "text-answer", questionIndex: 2, questionText: "Q3", text: "   " })).status, 400);
-    const sent = await post({ t, action: "text-answer", questionIndex: 2, questionText: "Q3", text: "Мен ауылда тудым.\r\nҮйіміз ақ еді." });
-    assert.equal(sent.status, 200);
+    assert.equal((await post("/api/teller", { t, action: "finish", answerId: s.id })).status, 400, "nothing answered yet");
+    assert.equal((await post("/api/teller", { t, action: "text-answer", answerId: s.id, partIndex: 1, text: "   " })).status, 400);
+    assert.equal((await post("/api/teller", { t, action: "text-answer", answerId: s.id, partIndex: 1, text: "Мен ауылда тудым.\r\nҮйіміз ақ еді." })).status, 200);
+    assert.equal((await post("/api/teller", { t, action: "finish", answerId: s.id })).status, 200);
 
-    for (let i = 0; i < 50 && store.db.answers[0].status !== "ready"; i++) await new Promise((r) => setTimeout(r, 20));
+    await waitFor(() => store.db.answers[0].status === "ready");
     const a = store.db.answers[0];
     assert.equal(a.status, "ready", a.error || "");
-    assert.equal(a.audio_path, undefined);
     assert.equal(a.transcript, "Мен ауылда тудым.\nҮйіміз ақ еді.");
     assert.equal(apiLog.filter((c) => c.service === "elevenlabs").length, 0, "typed answers must not be transcribed");
-    const prompt = apiLog.find((c) => c.service === "anthropic").body.messages[0].content;
-    assert.match(prompt, /in writing in Kazakh/);
+    const prompt = apiLog.filter((c) => c.service === "anthropic").at(-1).body.messages[0].content;
+    assert.match(prompt, /Kazakh/);
+    assert.match(prompt, /Сіз неден қорқатын едіңіз/);
     assert.match(prompt, /Үйіміз ақ еді/);
-
-    const view = await (await fetch(`${url}/api/teller?t=${t}`)).json();
-    assert.deepEqual(view.answered, [2]);
+    assert.equal((await latestStory(t)).typed, true);
+    // Finishing twice does nothing.
+    assert.equal((await post("/api/teller", { t, action: "finish", answerId: s.id })).status, 200);
   } finally {
+    server.close();
+  }
+});
+
+test("family asks another question on the same link; lead-up questions fall back when the AI fails", async () => {
+  const { server, store, url } = await startTestServer(8795);
+  const { post, get, tokens } = client(url);
+  try {
+    const created = await post("/api/create", { from: "Мухамед", name: "Мама", lang: "ru", ...DREAM });
+    const { t, f } = tokens(created.body);
+
+    assert.equal((await post("/api/family", { f: "nope", action: "ask", mainKey: "p02", mainQuestion: "Q" })).status, 404);
+    assert.equal((await post("/api/family", { f, action: "ask", mainKey: "p02", mainQuestion: "" })).status, 400);
+
+    globalThis.__CLAUDE_STEPS_FAIL__ = true;
+    const asked = await post("/api/family", { f, action: "ask", mainKey: "p02", mainQuestion: "Вы счастливы, как сложилась ваша жизнь?" });
+    globalThis.__CLAUDE_STEPS_FAIL__ = false;
+    assert.equal(asked.status, 200);
+    assert.equal(asked.body.tellerUrl, created.body.tellerUrl, "same link for the storyteller");
+    assert.deepEqual(asked.body.steps, fallbackSteps("ru", "parent"));
+
+    const view = await get(`/api/teller?t=${t}`);
+    assert.equal(view.stories.length, 2);
+    assert.equal(view.stories[1].main, "Вы счастливы, как сложилась ваша жизнь?");
+    assert.deepEqual(store.db.answers.map((a) => a.question_index), [0, 1]);
+    const fam = await get(`/api/family?f=${f}`);
+    assert.equal(fam.asked.length, 2);
+
+    // A storyteller made before relationships existed gets one when the family asks.
+    store.db.storytellers[0].relationship = null;
+    await post("/api/family", { f, action: "ask", relationship: "partner", mainKey: "r01", mainQuestion: "Как мы познакомились?" });
+    assert.equal(store.db.storytellers[0].relationship, "partner");
+  } finally {
+    globalThis.__CLAUDE_STEPS_FAIL__ = false;
     server.close();
   }
 });
@@ -145,18 +252,16 @@ test("comic panels: voice clip only when allowed, gone when voice is off or stor
   const audio = execFileSync(ffmpeg, ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=330:duration=10", "-c:a", "libopus", "-f", "webm", "pipe:1"], { maxBuffer: 1 << 24 });
 
   const { server, store, url } = await startTestServer(8797);
+  const { post, get, waitFor, tokens, latestStory } = client(url);
   try {
-    const post = (path, body, headers = {}) => fetch(url + path, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) }).then(async (r) => ({ status: r.status, body: await r.json() }));
     const auth = { authorization: "Bearer " + process.env.STUDIO_PASSWORD };
-    const waitFor = async (check) => { for (let i = 0; i < 150 && !(await check()); i++) await new Promise((r) => setTimeout(r, 40)); };
-
-    const created = await post("/api/create", { from: "Мухамед", name: "Мама", lang: "ru" });
-    const t = new URL(created.body.tellerUrl).searchParams.get("t");
-    const f = new URL(created.body.familyUrl).searchParams.get("f");
-    const slot = await post("/api/teller", { t, action: "upload-url", questionIndex: 0, questionText: "Где вы родились?", mime: "audio/webm" });
+    const created = await post("/api/create", { from: "Мухамед", name: "Мама", lang: "ru", ...DREAM });
+    const { t, f } = tokens(created.body);
+    const id = (await latestStory(t)).id;
+    const slot = await post("/api/teller", { t, action: "upload-url", answerId: id, partIndex: 0, mime: "audio/webm" });
     await fetch(slot.body.uploadUrl, { method: "PUT", headers: { "content-type": "audio/webm" }, body: audio });
-    await post("/api/teller", { t, action: "uploaded", answerId: slot.body.answerId, durationSec: 10 });
-    const id = slot.body.answerId;
+    await post("/api/teller", { t, action: "uploaded", partId: slot.body.partId, durationSec: 10 });
+    await post("/api/teller", { t, action: "finish", answerId: id });
     await waitFor(() => store.db.answers[0].status === "ready");
     assert.equal(store.db.answers[0].status, "ready", store.db.answers[0].error || "");
 
@@ -174,11 +279,11 @@ test("comic panels: voice clip only when allowed, gone when voice is off or stor
       await post("/api/studio", { action: "media-publish", mediaId: m.body.mediaId }, auth);
     }
     assert.equal((await post("/api/studio", { action: "media-upload-url", storytellerId: teller.id, answerId: id, kind: "panel", panelIndex: 9, mime: "image/png" }, auth)).status, 400);
-    let fam = await (await fetch(`${url}/api/family?f=${f}`)).json();
+    let fam = await get(`/api/family?f=${f}`);
     assert.deepEqual(fam.comics, [], "draft panels are not shown");
     assert.equal((await post("/api/studio", { action: "comic-publish", answerId: id, publish: true }, auth)).status, 200);
 
-    fam = await (await fetch(`${url}/api/family?f=${f}`)).json();
+    fam = await get(`/api/family?f=${f}`);
     assert.equal(fam.comics.length, 1);
     assert.equal(fam.comics[0].panels.length, 2);
     assert.equal(fam.comics[0].panels[0].caption, "Дом у реки");
@@ -191,7 +296,7 @@ test("comic panels: voice clip only when allowed, gone when voice is off or stor
     assert.equal(store.db.media.filter((m) => m.panel_index === 0).length, 1);
     assert.equal(store.db.media.find((m) => m.panel_index === 0).status, "published");
 
-    // Storyteller allows voice → clips are cut.
+    // Storyteller allows voice → clips are cut from the part's recording.
     await post("/api/teller", { t, action: "voice", answerId: id, allow: true });
     await waitFor(() => store.db.answers[0].comic_script.panels.every((p) => p.clip_path));
     const panels = store.db.answers[0].comic_script.panels;
@@ -199,7 +304,6 @@ test("comic panels: voice clip only when allowed, gone when voice is off or stor
     const clip = store.files.get("media/" + panels[0].clip_path);
     assert.equal(clip.type, "audio/mp4");
     assert.ok(clip.data.length > 500, "clip has audio");
-    // The clip is a real, playable file of about the quoted sentence's length.
     const { writeFileSync, mkdtempSync } = await import("node:fs");
     const { join } = await import("node:path");
     const { tmpdir } = await import("node:os");
@@ -210,28 +314,30 @@ test("comic panels: voice clip only when allowed, gone when voice is off or stor
     const dur = info.match(/Duration: 00:00:(\d+\.\d+)/);
     assert.ok(dur && Number(dur[1]) > 2 && Number(dur[1]) < 5, "clip length " + (dur && dur[1]));
 
-    fam = await (await fetch(`${url}/api/family?f=${f}`)).json();
+    fam = await get(`/api/family?f=${f}`);
     assert.ok(fam.comics[0].panels[0].clipUrl, "family hears the allowed clip");
     assert.equal(JSON.stringify(fam).includes("recordings/"), false, "full recording is never shared");
-
-    const studio = await (await fetch(`${url}/api/studio`, { headers: auth })).json();
+    const studio = await get("/api/studio", auth);
     assert.equal(JSON.stringify(studio).includes("clip_path"), false);
 
     // Voice off → clips deleted.
     await post("/api/teller", { t, action: "voice", answerId: id, allow: false });
     await waitFor(() => !store.db.answers[0].comic_script.panels.some((p) => p.clip_path));
     assert.equal([...store.files.keys()].some((k) => k.includes("/clips/")), false);
-    fam = await (await fetch(`${url}/api/family?f=${f}`)).json();
+    fam = await get(`/api/family?f=${f}`);
     assert.equal(fam.comics[0].panels[0].clipUrl, null);
 
     // Story hidden → comic disappears from the family page.
     await post("/api/teller", { t, action: "approve", answerId: id, approval: "hidden" });
-    fam = await (await fetch(`${url}/api/family?f=${f}`)).json();
+    fam = await get(`/api/family?f=${f}`);
     assert.deepEqual(fam.comics, []);
+    assert.equal(fam.asked[0].stage, "private");
 
-    // Typed answers can't turn voice on.
-    const typed = await post("/api/teller", { t, action: "text-answer", questionIndex: 1, questionText: "Q2", text: "Текст" });
-    assert.equal((await post("/api/teller", { t, action: "voice", answerId: typed.body.answerId, allow: true })).status, 400);
+    // A typed story can't turn voice on.
+    await post("/api/family", { f, action: "ask", mainKey: "p02", mainQuestion: "Q2" });
+    const typedId = (await latestStory(t)).id;
+    await post("/api/teller", { t, action: "text-answer", answerId: typedId, partIndex: 0, text: "Текст" });
+    assert.equal((await post("/api/teller", { t, action: "voice", answerId: typedId, allow: true })).status, 400);
 
     // Deleting removes panels too.
     await post("/api/teller", { t, action: "delete", answerId: id });
@@ -250,7 +356,14 @@ test("automatic comics: approval draws a sheet and panels with the photos, redra
     const waitFor = async (check) => { for (let i = 0; i < 200 && !(await check()); i++) await new Promise((r) => setTimeout(r, 30)); };
     const gemini = () => apiLog.filter((c) => c.service === "gemini");
 
-    const created = await post("/api/create", { from: "Мухамед", name: "Мама", lang: "ru" });
+    const { latestStory } = client(url);
+    const typedStory = async (t, text) => {
+      const s = await latestStory(t);
+      await post("/api/teller", { t, action: "text-answer", answerId: s.id, partIndex: 0, text });
+      await post("/api/teller", { t, action: "finish", answerId: s.id });
+      return s.id;
+    };
+    const created = await post("/api/create", { from: "Мухамед", name: "Мама", lang: "ru", ...DREAM });
     const t = new URL(created.body.tellerUrl).searchParams.get("t");
     const f = new URL(created.body.familyUrl).searchParams.get("f");
     const teller = store.db.storytellers[0];
@@ -265,8 +378,7 @@ test("automatic comics: approval draws a sheet and panels with the photos, redra
     await post("/api/studio", { action: "media-publish", mediaId: ph.body.mediaId }, auth);
     assert.equal(store.db.media.find((m) => m.kind === "photo").status, "reference");
 
-    const sent = await post("/api/teller", { t, action: "text-answer", questionIndex: 0, questionText: "Где вы родились?", text: "Я родилась в ауле у реки." });
-    const id = sent.body.answerId;
+    const id = await typedStory(t, "Я родилась в ауле у реки.");
     await waitFor(() => store.db.answers[0].status === "ready");
     assert.equal(gemini().length, 0, "nothing is drawn before approval");
 
@@ -337,10 +449,11 @@ test("automatic comics: approval draws a sheet and panels with the photos, redra
 
     // Auto-publish: a new approved story goes straight to the family page.
     process.env.AUTO_PUBLISH = "on";
-    const s2 = await post("/api/teller", { t, action: "text-answer", questionIndex: 1, questionText: "Q2", text: "Мама пекла баурсаки." });
-    await waitFor(() => store.db.answers.find((x) => x.id === s2.body.answerId).status === "ready");
-    await post("/api/teller", { t, action: "approve", answerId: s2.body.answerId, approval: "approved" });
-    await waitFor(() => store.db.answers.find((x) => x.id === s2.body.answerId).comic_status === "ready");
+    await post("/api/family", { f, action: "ask", mainKey: "p02", mainQuestion: "Q2" });
+    const s2 = await typedStory(t, "Мама пекла баурсаки.");
+    await waitFor(() => store.db.answers.find((x) => x.id === s2).status === "ready");
+    await post("/api/teller", { t, action: "approve", answerId: s2, approval: "approved" });
+    await waitFor(() => store.db.answers.find((x) => x.id === s2).comic_status === "ready");
     fam = await (await fetch(`${url}/api/family?f=${f}`)).json();
     assert.equal(fam.comics.length, 2);
 
