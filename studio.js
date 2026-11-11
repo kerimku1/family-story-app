@@ -124,7 +124,8 @@
         h("h1", { text: t.name }),
         h("p", { class: "meta", text: [REL[t.relationship], "asked by " + t.from, "started " + day(t.createdAt)].filter(Boolean).join(" · ") }),
         h("div", { class: "toolbar" },
-          h("a", { class: "btn btn-secondary", href: familyUrl, target: "_blank", rel: "noopener" }, "Open family page ↗"))),
+          h("a", { class: "btn btn-secondary", href: familyUrl, target: "_blank", rel: "noopener" }, "Open family page ↗")),
+        tellerLinkBox(t)),
       latest ? storyCard(t, latest, true) : h("p", { class: "lead", text: "No questions yet." }),
       older.length ? h("section", { class: "older" },
         h("h2", { text: "Older stories (" + older.length + ")" }),
@@ -142,6 +143,18 @@
         h("div", { class: "box" },
           h("p", { text: "Delete " + t.name + " and everything about them: all stories, recordings, comics, photos and both links. This can't be undone." }),
           h("button", { class: "btn btn-quiet danger", type: "button", disabled: busy === t.id + ":delete", onclick: function () { deletePerson(t); } }, "Delete " + t.name))));
+  }
+
+  // The storyteller's own private link (where they answer and tap "OK to use").
+  function tellerUrlOf(t) { return location.origin + "/?t=" + t.tellerToken; }
+  function tellerLinkBox(t, compact) {
+    const url = tellerUrlOf(t);
+    return h("div", { class: compact ? "teller-link compact" : "teller-link" },
+      compact ? null : h("p", { class: "meta", text: t.name + "'s own link (where they answer and approve). Keep it private: it shows their stories before they approve them." }),
+      compact ? null : h("div", { class: "link-box", text: url }),
+      h("div", { class: "toolbar" },
+        h("button", { class: "btn btn-secondary", type: "button", onclick: function (e) { copy(e.target, url); } }, "Copy " + t.name + "'s link"),
+        h("a", { class: "btn btn-quiet", href: url, target: "_blank", rel: "noopener" }, "Open their page ↗")));
   }
 
   function day(iso) {
@@ -245,6 +258,7 @@
         next.push(h("p", { class: "meta", text: "Some pictures changed after this video was made. Remake it to include them." }));
       }
     }
+    if (st.step === 2 && a.approval !== "hidden") next.push(tellerLinkBox(t, true));
     if (st.action === "hide") next.push(h("button", { class: "btn btn-quiet", type: "button", disabled: busy === a.id + ":publish", onclick: function () { publishComic(a, false); } }, "Hide it from the family"));
     if (st.extra === "video-too") next.push(h("button", { class: "btn btn-secondary", type: "button", disabled: busy === a.id + ":video", onclick: function () { makeVideo(a); } }, "Make an animated video too"));
     const notes = script && script.video_notes && script.video_notes.length ? script.video_notes : null;

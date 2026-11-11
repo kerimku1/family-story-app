@@ -83,3 +83,5 @@
 .video-box video { width: 100%; border-radius: 10px; background: #000; display: block; }
 .narrator { display: flex; flex-direction: column; gap: 6px; }
 .narrator .chip { font-size: 15px; padding: 8px 14px; }
+.teller-link { display: flex; flex-direction: column; gap: 8px; }
+.teller-link .link-box { font-size: 14px; }

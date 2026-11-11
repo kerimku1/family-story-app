@@ -187,11 +187,13 @@
         h("div", { class: "notice good", role: "status", text: t.askAdded }),
         h("p", { class: "small", text: t.stepsPreview(data.name) }),
         h("ol", { class: "steps-preview" }, ask.added.steps.map(function (s) { return h("li", { text: s }); })));
-      parts.push(
+      const tellerUrl = savedTellerLink();
+      if (!tellerUrl) parts.push(h("p", { class: "small", text: t.askRemind(data.name) }));
+      else parts.push(
         h("p", { class: "small", text: t.tellerLink }),
-        h("div", { class: "link-box", text: data.tellerUrl }),
-        h("a", { class: "btn btn-primary", href: "https://wa.me/?text=" + encodeURIComponent(msg + " " + data.tellerUrl), target: "_blank", rel: "noopener" }, t.shareWa),
-        h("a", { class: "btn btn-secondary", href: "https://t.me/share/url?url=" + encodeURIComponent(data.tellerUrl) + "&text=" + encodeURIComponent(msg), target: "_blank", rel: "noopener" }, t.shareTg),
+        h("div", { class: "link-box", text: tellerUrl }),
+        h("a", { class: "btn btn-primary", href: "https://wa.me/?text=" + encodeURIComponent(msg + " " + tellerUrl), target: "_blank", rel: "noopener" }, t.shareWa),
+        h("a", { class: "btn btn-secondary", href: "https://t.me/share/url?url=" + encodeURIComponent(tellerUrl) + "&text=" + encodeURIComponent(msg), target: "_blank", rel: "noopener" }, t.shareTg),
         h("button", { class: "btn btn-quiet", type: "button", onclick: copyLink }, ask.copied ? t.copied : t.copy));
     }
     if (ask.open) {
@@ -247,8 +249,14 @@
     render();
   }
 
+  // The storyteller's link is private to them. The family page shows it only on the device
+  // where it was created (saved there when the links were made), never from the server.
+  function savedTellerLink() {
+    try { return localStorage.getItem("teller-link:" + token) || ""; } catch (e) { return ""; }
+  }
+
   async function copyLink() {
-    try { await navigator.clipboard.writeText(data.tellerUrl); } catch (e) { /* the link is shown on the page */ }
+    try { await navigator.clipboard.writeText(savedTellerLink()); } catch (e) { /* the link is shown on the page */ }
     ask.copied = true;
     render();
   }

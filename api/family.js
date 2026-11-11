@@ -5,7 +5,7 @@
 // GET  ?f=TOKEN
 // POST { f, action: "ask", mainKey, mainQuestion, relationship? } → asks the same person one more main question
 import { getStore } from "./_lib/store.js";
-import { send, fail, query, readJson, baseUrl } from "./_lib/http.js";
+import { send, fail, query, readJson } from "./_lib/http.js";
 import { RELATIONSHIPS, cleanMain, createStory, storyProgress } from "./_lib/stories.js";
 
 export const config = { maxDuration: 60 };
@@ -20,7 +20,6 @@ export default async function handler(req, res) {
     const token = String((req.method === "POST" ? body.f : query(req).f) || "");
     let teller = token ? await store.storytellerByFamilyToken(token) : null;
     if (!teller) return fail(res, 404, "Link not found");
-    const tellerUrl = `${baseUrl(req)}/?t=${teller.teller_token}`;
 
     if (req.method === "POST") {
       if (body.action !== "ask") return fail(res, 400, "Unknown action");
@@ -30,7 +29,7 @@ export default async function handler(req, res) {
         teller = await store.updateStoryteller(teller.id, { relationship: body.relationship });
       }
       const story = await createStory(store, teller, main);
-      return send(res, 200, { tellerUrl, mainQuestion: story.question_text, steps: story.sub_questions });
+      return send(res, 200, { mainQuestion: story.question_text, steps: story.sub_questions });
     }
 
     const answers = await store.listAnswers(teller.id);
@@ -82,7 +81,6 @@ export default async function handler(req, res) {
       from: teller.from_name,
       lang: teller.lang,
       relationship: teller.relationship || null,
-      tellerUrl,
       asked,
       collected: answers.filter((a) => ["uploaded", "processing", "ready"].includes(a.status)).length,
       comics,

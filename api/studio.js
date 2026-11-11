@@ -83,6 +83,7 @@ export default async function handler(req, res) {
           lang: t.lang,
           createdAt: t.created_at,
           familyToken: t.family_token,
+          tellerToken: t.teller_token,
           // Built only from approved stories, so hidden ones never leak into production.
           lifeCard: answers
             .filter((a) => a.approval === "approved" && a.details)

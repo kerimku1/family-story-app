@@ -208,6 +208,7 @@
         from: from, name: name, lang: state.form.qlang, relationship: state.sel.relationship,
         mainKey: state.sel.key, mainQuestion: mainQuestion
       });
+      try { localStorage.setItem("teller-link:" + new URL(data.familyUrl).searchParams.get("f"), data.tellerUrl); } catch (e) { /* storage blocked */ }
       state.created = { tellerUrl: data.tellerUrl, familyUrl: data.familyUrl, lang: state.form.qlang, name: name, main: data.mainQuestion, steps: data.steps || [] };
       state.copied = "";
       window.scrollTo(0, 0);
@@ -318,8 +319,17 @@
     const t = T();
     const open = openStories();
     add(h("h1", { text: t.welcomeTitle(state.name, state.from) }));
+    const waiting = state.stories.filter(function (s) { return s.status === "ready" && s.approval === "waiting"; });
+    if (waiting.length) {
+      add(h("section", { class: "card main-q ready-card" },
+        h("h2", { text: t.readyTitle(waiting.length) }),
+        waiting.map(function (s) { return h("p", { class: "main-q-text", text: s.title || s.main }); }),
+        h("p", { class: "small", text: t.readyLead }),
+        h("button", { class: "btn btn-primary", type: "button", onclick: function () { go("stories"); } }, t.readyBtn)));
+    }
     if (!open.length) {
-      add(h("p", { class: "lead", text: t.noOpen }), storiesButton("btn-primary"));
+      if (!waiting.length) add(h("p", { class: "lead", text: t.noOpen }), storiesButton("btn-primary"));
+      else add(storiesButton());
       return;
     }
     add(h("p", { class: "lead", text: t.welcomeLead }));

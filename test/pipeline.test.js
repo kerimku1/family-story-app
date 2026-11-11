@@ -108,7 +108,7 @@ test("full flow: choose a question → answer the lead-up questions → one stor
     assert.deepEqual(fam.asked, [{ main: DREAM.mainQuestion, key: "p01", answered: 2, total: 5, stage: "answering" }]);
     assert.equal(fam.relationship, "parent");
     assert.equal(JSON.stringify(fam).includes("врачом"), false);
-    assert.equal(fam.tellerUrl, created.body.tellerUrl);
+    assert.equal(JSON.stringify(fam).includes(t), false, "the family page never gets the storyteller's private link");
 
     // "Write my story": one story from both answers.
     assert.equal((await post("/api/teller", { t, action: "finish", answerId: story.id })).status, 200);
@@ -225,7 +225,7 @@ test("family asks another question on the same link; lead-up questions fall back
     const asked = await post("/api/family", { f, action: "ask", mainKey: "p02", mainQuestion: "Вы счастливы, как сложилась ваша жизнь?" });
     globalThis.__CLAUDE_STEPS_FAIL__ = false;
     assert.equal(asked.status, 200);
-    assert.equal(asked.body.tellerUrl, created.body.tellerUrl, "same link for the storyteller");
+    assert.equal(JSON.stringify(asked.body).includes(t), false, "no storyteller link on the family page");
     assert.deepEqual(asked.body.steps, fallbackSteps("ru", "parent"));
 
     const view = await get(`/api/teller?t=${t}`);
