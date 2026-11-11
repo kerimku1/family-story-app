@@ -15,6 +15,7 @@ async function answerAll(t, id, approve) {
   if (approve) {
     await post("/api/teller", { t, action: "approve", answerId: id, approval: "approved" });
     await wait(() => ["ready", "partial", "failed"].includes(store.db.answers.find((a) => a.id === id).comic_status));
+    await wait(() => store.db.media.some((m) => m.answer_id === id && m.kind === "video" && m.status !== "rendering"));
   }
 }
 // Mama: an older person with a finished comic, a story waiting for OK, one still answering.
@@ -27,4 +28,8 @@ await post("/api/family", { f: mama.f, action: "ask", mainKey: "p03", mainQuesti
 // Partner: the newest person; latest story approved and drawn, waiting to be sent.
 const partner = tok(await post("/api/create", { from: "Мухамед", name: "Айгерим", lang: "ru", relationship: "partner", mainKey: "r01", mainQuestion: "Что ты подумала, когда впервые меня увидела?" }));
 id = await latest(partner.t); await answerAll(partner.t, id, true);
+// …and a newer question with every answer in, but "Write my story" not tapped yet.
+await post("/api/family", { f: partner.f, action: "ask", mainKey: "r02", mainQuestion: "What did you think of me when we first met?" });
+id = await latest(partner.t);
+for (const i of [0, 1, 2, 3, 4]) await post("/api/teller", { t: partner.t, action: "text-answer", answerId: id, partIndex: i, text: "Ответ " + (i + 1) });
 console.log("Demo studio at " + url + "/studio.html (password " + process.env.STUDIO_PASSWORD + ")");

@@ -1,5 +1,8 @@
 // In-memory stand-in for Supabase, used by tests and the local test server.
 import { randomUUID } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { createRequire } from "node:module";
+const require = createRequire(import.meta.url);
 
 const clone = (v) => (v === undefined || v === null ? null : structuredClone(v));
 
@@ -99,6 +102,7 @@ export function sampleStory() {
     },
     comic: {
       style_notes: "Rural Kazakhstan village by a river, warm Sunday morning",
+      storyteller_voice: "female",
       characters: [{ name: "Narrator as a girl", look: "young girl, not described further", is_storyteller: true }, { name: "Mama", look: "not described", is_storyteller: false }],
       panels: [
         { setting: "Village by a river", action: "A white house with blue shutters", caption: "Дом у реки", quote: "у нас был белый дом с синими ставнями", quote_answer: 1 },
@@ -109,10 +113,31 @@ export function sampleStory() {
   };
 }
 
+// One second of real MP3 audio, so the video maker can measure and mix it.
+let speech = null;
+function fakeSpeech() {
+  if (!speech) {
+    const bin = require("ffmpeg-static");
+    speech = execFileSync(bin, ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=220:duration=1", "-c:a", "libmp3lame", "-f", "mp3", "pipe:1"]);
+  }
+  return speech;
+}
+
+function fakePicture(n) {
+  const colour = ((n * 2654435761) >>> 8 & 0xffffff).toString(16).padStart(6, "0");
+  return execFileSync(require("ffmpeg-static"), ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", `color=c=0x${colour}:s=64x48`, "-frames:v", "1", "-c:v", "png", "-f", "image2pipe", "pipe:1"]);
+}
+
 export function installFakeApis(log = []) {
   const realFetch = globalThis.fetch;
   globalThis.fetch = async (input, init = {}) => {
     const url = typeof input === "string" ? input : input.url;
+    if (url.startsWith("https://api.elevenlabs.io/v1/text-to-speech/")) {
+      const body = JSON.parse(init.body);
+      log.push({ service: "tts", url, init, body });
+      if (globalThis.__TTS_FAIL__) return new Response('{"detail":"missing_permissions"}', { status: 401 });
+      return new Response(fakeSpeech(), { headers: { "content-type": "audio/mpeg" } });
+    }
     if (url.startsWith("https://api.elevenlabs.io/")) {
       log.push({ service: "elevenlabs", url, init });
       const words = SAMPLE_TRANSCRIPT.split(" ").map((w, i) => ({ text: w, start: i * 0.4, end: i * 0.4 + 0.35, type: "word" }));
@@ -126,8 +151,8 @@ export function installFakeApis(log = []) {
         return Response.json({ candidates: [{ finishReason: "SAFETY", content: { parts: [] } }] });
       }
       const n = log.filter((c) => c.service === "gemini").length;
-      // A real 1x1 PNG, tagged so tests can tell images apart.
-      const png = Buffer.concat([Buffer.from("89504e470d0a1a0a0000000d4948445200000001000000010806000000" + "1f15c4890000000d49444154789c6360f8cfc0f01f0005fe02fe" + "a7d4a3a40000000049454e44ae426082", "hex"), Buffer.from("#" + n)]);
+      // A real small PNG, a different colour each time so tests can tell images apart.
+      const png = fakePicture(n);
       return Response.json({ candidates: [{ finishReason: "STOP", content: { role: "model", parts: [{ text: "here" }, { inlineData: { mimeType: "image/png", data: png.toString("base64") } }] } }] });
     }
     if (url.startsWith("https://api.anthropic.com/")) {

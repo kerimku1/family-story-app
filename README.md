@@ -83,7 +83,7 @@ You need four accounts. Supabase and Vercel have free plans; ElevenLabs and Anth
 ### 5. Check it works
 
 1. Open your Vercel address, choose who the person is and one question, and create the links. Open the storyteller link on your phone.
-2. Answer a lead-up question by voice or text and tap **Send**. You should see "Saved". Answer a few more, then tap **Write my story**.
+2. Answer a lead-up question by voice or text and tap **Send**. You should see "Saved". Answer a few more, then tap **Write my story** (or, in the studio, **Write the story now**).
 3. Wait about a minute and open **My stories**: your story should be written. Tap **OK to use**.
 4. Open `/studio.html`, enter your studio password. The story's box says what to do next.
 5. Upload any image as a test and open the family link: the image appears there.
@@ -122,6 +122,14 @@ Each story costs about one character sheet plus one image per panel (usually 4�
 Open **More options**, tap **Copy prompt 1** (2, 3…), make the picture in Gemini, then tap **Use my own** under that picture. Then **Send comic to the family**.
 
 To clean up test data, open the person in the studio → **More for …** → **Delete …** (or **More options → Delete story** for one story).
+
+### Animated video (automatic)
+
+Right after the comic is drawn, the app makes a short video from it: each picture slowly zooms or pans, the caption is drawn by the app (so it's always spelled right), and there is a voice-over. Where the storyteller allowed their voice, it's their **real voice** for that picture. Everywhere else a calm narrator (ElevenLabs text-to-speech, woman or man) reads their words. It takes 1–2 minutes and costs a little ElevenLabs credit.
+
+- Your ElevenLabs key needs **Text to Speech** permission as well as Speech to Text (ElevenLabs → Developers → API Keys → edit the key).
+- In the studio: watch the video, tap **Remake video** (choose Woman / Man) if needed, then **Send to the family**. That sends the comic and the video together.
+- To turn the automatic video off, add `AUTO_VIDEO=off` in Vercel; the **Make the animated video** button still works.
 
 ### The real voice
 

@@ -508,3 +508,79 @@ test("studio deletes a story or a whole person with all their files", async () =
     server.close();
   }
 });
+
+test("animated video: made after the comic, narrator or real voice, sent with the comic, remade", async () => {
+  const { server, store, apiLog, url } = await startTestServer(8793);
+  const { post, get, waitFor, tokens, latestStory } = client(url);
+  const auth = { authorization: "Bearer " + process.env.STUDIO_PASSWORD };
+  process.env.GEMINI_API_KEY = "test-gemini";
+  try {
+    const created = await post("/api/create", { from: "Мухамед", name: "Мама", lang: "ru", ...DREAM });
+    const { t, f } = tokens(created.body);
+    const id = (await latestStory(t)).id;
+    await post("/api/teller", { t, action: "text-answer", answerId: id, partIndex: 0, text: "Я родилась в ауле у реки." });
+
+    // "Write the story now" from the studio, before the storyteller taps it.
+    assert.equal((await post("/api/studio", { action: "retry", answerId: id }, auth)).status, 200);
+    await waitFor(() => store.db.answers[0].status === "ready");
+    assert.equal(store.db.answers[0].comic_script.storyteller_voice, "female");
+    assert.equal((await post("/api/studio", { action: "video-make", answerId: id }, auth)).status, 400, "not before approval");
+
+    // Approval → comic → video, all automatic.
+    await post("/api/teller", { t, action: "approve", answerId: id, approval: "approved" });
+    const video = () => store.db.media.filter((m) => m.answer_id === id && m.kind === "video");
+    await waitFor(() => video().some((m) => m.status === "draft" || m.status === "failed"), 400);
+    const v = video()[0];
+    assert.equal(v.status, "draft", v.title);
+    assert.equal(v.panel_index, -1);
+    const file = store.files.get("media/" + v.path);
+    assert.equal(file.type, "video/mp4");
+    assert.ok(file.data.length > 10000, "a real video file");
+    const tts = apiLog.filter((c) => c.service === "tts");
+    assert.equal(tts.length, 2, "narrator reads each picture (typed story, no real voice)");
+    assert.match(tts[0].url, /XrExE9yKIg1WjnnlVkGX/, "female narrator");
+    assert.equal(tts[0].body.model_id, "eleven_v3");
+    assert.deepEqual(store.db.answers[0].comic_script.video_notes, []);
+
+    // The family sees nothing until the studio sends it; then comic and video together.
+    let fam = await get(`/api/family?f=${f}`);
+    assert.deepEqual(fam.media, []);
+    let studio = await get("/api/studio", auth);
+    const sv = studio.storytellers[0].media.find((m) => m.kind === "video");
+    assert.equal(sv.appMade, true);
+    assert.ok(sv.url);
+    await post("/api/studio", { action: "comic-publish", answerId: id, publish: true }, auth);
+    fam = await get(`/api/family?f=${f}`);
+    assert.equal(fam.comics.length, 1);
+    assert.equal(fam.media.length, 1);
+    assert.equal(fam.media[0].kind, "video");
+
+    // Remake with a man's voice while narration fails: the new video replaces the old, stays live, and the problem is reported.
+    globalThis.__TTS_FAIL__ = true;
+    assert.equal((await post("/api/studio", { action: "video-make", answerId: id, narrator: "male" }, auth)).status, 200);
+    await waitFor(() => video().length === 1 && video()[0].id !== v.id && video()[0].status !== "rendering", 400);
+    globalThis.__TTS_FAIL__ = false;
+    assert.equal(video().length, 1);
+    assert.equal(video()[0].status, "published");
+    assert.equal(store.files.has("media/" + v.path), false, "old video deleted");
+    assert.match(apiLog.filter((c) => c.service === "tts").at(-1).url, /JBFqnCBsd6RMkjVDRZzb/);
+    assert.match(store.db.answers[0].comic_script.video_notes.join(" "), /text-to-speech permission/);
+
+    // Hiding the comic hides its video too; sending only the comic leaves the video out.
+    await post("/api/studio", { action: "comic-publish", answerId: id, publish: false }, auth);
+    assert.deepEqual((await get(`/api/family?f=${f}`)).media, []);
+    await post("/api/studio", { action: "comic-publish", answerId: id, publish: true, withVideo: false }, auth);
+    fam = await get(`/api/family?f=${f}`);
+    assert.equal(fam.comics.length, 1);
+    assert.deepEqual(fam.media, []);
+
+    // Deleting the story deletes the video file.
+    const path = video()[0].path;
+    await post("/api/studio", { action: "story-delete", answerId: id }, auth);
+    assert.equal(store.files.has("media/" + path), false);
+  } finally {
+    globalThis.__TTS_FAIL__ = false;
+    delete process.env.GEMINI_API_KEY;
+    server.close();
+  }
+});

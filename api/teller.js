@@ -12,7 +12,8 @@ import { getStore } from "./_lib/store.js";
 import { send, fail, readJson, query, extFor, inBackground } from "./_lib/http.js";
 import { processAnswer, transcribePart } from "./_lib/pipeline.js";
 import { syncClips } from "./_lib/clips.js";
-import { generateComic, autoComicsOn } from "./_lib/comic.js";
+import { autoComicsOn } from "./_lib/comic.js";
+import { comicThenVideo } from "./_lib/video.js";
 import { storyProgress, deleteStory } from "./_lib/stories.js";
 
 export const config = { maxDuration: 300 };
@@ -131,7 +132,7 @@ export default async function handler(req, res) {
       // First approval: draw the comic automatically (only if it hasn't been drawn yet).
       if (body.approval === "approved" && autoComicsOn()) {
         const drawn = (await store.listMediaForAnswer(answer.id)).some((m) => m.kind === "panel");
-        if (!drawn) jobs.push(generateComic(store, answer.id));
+        if (!drawn) jobs.push(comicThenVideo(store, answer.id));
       }
       await inBackground(Promise.all(jobs));
       return send(res, 200, { ok: true });

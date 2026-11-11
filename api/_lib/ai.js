@@ -52,6 +52,7 @@ export const STORY_SCHEMA = obj({
   }),
   comic: obj({
     style_notes: str("In English: era, region and mood for the artist, based only on the story"),
+    storyteller_voice: { type: "string", enum: ["female", "male", "unknown"], description: "The storyteller's gender if it is clear from the story or the grammar (e.g. Russian past-tense endings), for choosing a narrator voice; else unknown" },
     characters: list(obj({
       name: str("Character name as in the story"),
       look: str("In English: age in this story and visual look, from stated details; say 'not described' where unknown"),

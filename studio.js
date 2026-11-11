@@ -58,7 +58,8 @@
       data = await api("GET");
       clearTimeout(pollTimer);
       const waiting = data.storytellers.some(function (t) {
-        return t.answers.some(function (a) { return a.comicStatus === "drawing" || a.status === "uploaded" || a.status === "processing"; });
+        return t.media.some(function (m) { return m.appMade && m.status === "rendering"; }) ||
+          t.answers.some(function (a) { return a.comicStatus === "drawing" || a.status === "uploaded" || a.status === "processing"; });
       });
       if (waiting) pollTimer = setTimeout(function () { if (!busy) load(); }, 6000);
     } catch (e) {
@@ -152,32 +153,69 @@
     return t.media.filter(function (m) { return m.answerId === a.id && m.kind === "panel" && (m.status === "draft" || m.status === "published"); });
   }
 
-  // step: 0 answers, 1 approval, 2 comic, 3 family, 4 done
+  const FRESH_MS = 10 * 60 * 1000;
+  function videoOf(t, a) {
+    const vids = t.media.filter(function (m) { return m.answerId === a.id && m.appMade; });
+    return vids[vids.length - 1] || null;
+  }
+  const narratorChoice = {};
+
+  // Steps: 0 Answers, 1 Story, 2 OK to use, 3 Comic, 4 Video, 5 Family, 6 = all done.
   function stageOf(t, a) {
     const answered = (a.answeredParts || []).length;
     const total = (a.steps || []).length;
-    if (a.status === "collecting") return { step: 0, tone: "wait", short: "Answering " + answered + "/" + total, text: t.name + " has answered " + answered + " of " + total + " questions. Nothing to do yet: the story is written when they tap “Write my story”." };
-    if (a.status === "uploaded" || a.status === "processing") return { step: 0, tone: "wait", short: "Writing", text: "Writing the story… usually about a minute. This page refreshes by itself." };
-    if (a.status === "failed") return { step: 0, tone: "bad", short: "Failed", todo: true, text: "The story couldn't be written. " + (a.error || ""), action: "retry" };
-    if (a.approval === "hidden") return { step: 1, tone: "wait", short: "Private", text: t.name + " chose to keep this story private. Nothing to do." };
-    if (a.approval !== "approved") return { step: 1, tone: "wait", short: "Waiting for OK", text: "The story is written. Waiting for " + t.name + " to tap “OK to use” on their page." };
-    const panels = panelsOf(t, a);
-    const live = panels.some(function (m) { return m.status === "published"; });
-    if (a.comicStatus === "drawing") return { step: 2, tone: "wait", short: "Drawing", text: "Drawing the comic… usually about a minute. This page refreshes by itself." };
-    if (!panels.length) {
-      if (!data.aiDrawing) return { step: 2, tone: "todo", short: "Needs comic", todo: true, text: "Automatic drawing is off (add GEMINI_API_KEY in Vercel). You can still upload your own pictures under “More options”." };
-      return { step: 2, tone: "todo", short: "Draw comic", todo: true, text: a.comicStatus === "failed" ? "Drawing failed: " + (a.comicError || "") + " Try again." : "Approved! Draw the comic.", action: "draw" };
+    if (a.status === "collecting") {
+      if (!answered) return { step: 0, tone: "wait", short: "Not answered yet", text: t.name + " hasn't answered yet. Send them their link again if needed." };
+      return { step: 0, tone: "todo", short: "Answered " + answered + "/" + total, todo: true, action: "write",
+        text: t.name + " answered " + answered + " of " + total + " questions. Write the story from these answers now" + (answered < total ? ", or wait for the rest." : ".") };
     }
-    if (!live) return { step: 3, tone: "todo", short: "Check & send", todo: true, text: "Look at the pictures below. Tap “Redraw” on any that look wrong. When you like them, send the comic to the family.", action: "publish", partial: a.comicStatus === "partial" ? (a.comicError || "Some pictures couldn't be drawn.") : "" };
-    return { step: 4, tone: "good", short: "On family page", text: "Done. The family can see this comic.", action: "hide" };
+    if (a.status === "uploaded" || a.status === "processing") return { step: 1, tone: "wait", short: "Writing", text: "Writing the story… usually about a minute. This page refreshes by itself." };
+    if (a.status === "failed") return { step: 1, tone: "bad", short: "Failed", todo: true, text: "The story couldn't be written. " + (a.error || ""), action: "retry" };
+    if (a.approval === "hidden") return { step: 2, tone: "wait", short: "Private", text: t.name + " chose to keep this story private. Nothing to do." };
+    if (a.approval !== "approved") return { step: 2, tone: "wait", short: "Waiting for OK", text: "The story is written. " + t.name + " now reads it on their link and taps “OK to use”. Then the comic and video are made automatically." };
+    const panels = panelsOf(t, a);
+    const comicLive = panels.some(function (m) { return m.status === "published"; });
+    if (a.comicStatus === "drawing") return { step: 3, tone: "wait", short: "Drawing", text: "Drawing the comic… usually 1–2 minutes. The video is made right after. This page refreshes by itself." };
+    if (!panels.length) {
+      if (!data.aiDrawing) return { step: 3, tone: "todo", short: "Needs comic", todo: true, text: "Automatic drawing is off (add GEMINI_API_KEY in Vercel). You can still upload your own pictures under “More options”." };
+      return { step: 3, tone: "todo", short: "Draw comic", todo: true, text: a.comicStatus === "failed" ? "Drawing failed: " + (a.comicError || "") + " Try again." : "Approved! Draw the comic.", action: "draw" };
+    }
+    const partial = a.comicStatus === "partial" ? (a.comicError || "Some pictures couldn't be drawn.") : "";
+    const v = videoOf(t, a);
+    if (v && v.status === "rendering" && Date.now() - Date.parse(v.createdAt) < FRESH_MS) return { step: 4, tone: "wait", short: "Making video", text: "Making the animated video… usually 1–2 minutes. This page refreshes by itself." };
+    const hasVideo = v && (v.status === "draft" || v.status === "published");
+    if (!hasVideo) {
+      if (comicLive) return { step: 6, tone: "good", short: "On family page", text: "Done. The family can see the comic.", action: "hide", extra: "video-too" };
+      const failed = v && (v.status === "failed" || v.status === "rendering");
+      return { step: 4, tone: failed ? "bad" : "todo", short: "Make video", todo: true, action: "video", partial: partial,
+        text: failed ? "The video couldn't be made: " + (v.status === "failed" ? v.title || "" : "it took too long.") + " Try again."
+          : "The comic is drawn. Check the pictures below (tap “Redraw” on any you don't like), then make the animated video." };
+    }
+    if (!comicLive || v.status !== "published") {
+      return { step: 5, tone: "todo", short: "Send to family", todo: true, action: "publish", partial: partial,
+        text: comicLive ? "The family has the comic. Watch the video below and send it too." : "Watch the video below. When you're happy, send the comic and the video to the family." };
+    }
+    return { step: 6, tone: "good", short: "On family page", text: "Done. The family can see the comic and the video.", action: "hide" };
   }
 
   function stepper(step) {
-    const names = ["Answers", "OK to use", "Comic", "Family"];
+    const names = ["Answers", "Story", "OK to use", "Comic", "Video", "Family"];
     return h("ol", { class: "stepper", "aria-label": "Progress" }, names.map(function (n, i) {
       const state = i < step ? "done" : i === step ? "now" : "later";
       return h("li", { class: state, "aria-current": state === "now" ? "step" : null }, h("span", { class: "num", text: state === "done" ? "✓" : String(i + 1) }), n);
     }));
+  }
+
+  // Woman / man narrator for the parts without the storyteller's real voice.
+  function narratorPicker(t, a) {
+    const script = a.comicScript || {};
+    const current = narratorChoice[a.id] || (script.storyteller_voice === "male" ? "male" : "female");
+    const realVoice = a.allowVoice && !a.typed;
+    return h("div", { class: "narrator" },
+      h("span", { class: "meta", text: realVoice ? "Uses " + t.name + "'s real voice where we have it. Narrator for the rest:" : "Narrator voice:" }),
+      h("div", { class: "chips" }, [["female", "Woman"], ["male", "Man"]].map(function (o) {
+        return h("button", { type: "button", class: "chip", "aria-pressed": String(current === o[0]), onclick: function () { narratorChoice[a.id] = o[0]; render(); } }, o[1]);
+      })));
   }
 
   function storyCard(t, a, isLatest) {
@@ -186,22 +224,43 @@
     const script = a.comicScript;
     const total = script ? (script.panels || []).length : 0;
     const hasPhotos = t.media.some(function (m) { return m.kind === "photo" && m.url; });
+    const v = videoOf(t, a);
+    const videoReady = v && v.url && (v.status === "draft" || v.status === "published");
     const next = [h("p", { class: "next-text", text: st.text })];
     if (st.partial) next.push(h("p", { class: "meta", text: st.partial }));
+    if (st.action === "write") next.push(bigButton(busy === a.id ? "Starting…" : "Write the story now", busy === a.id, function () { retry(a, true); }));
     if (st.action === "retry") next.push(bigButton("Try again", busy === a.id, function () { retry(a); }));
     if (st.action === "draw") {
       if (!hasPhotos) next.push(h("p", { class: "meta", text: "Tip: add a photo of " + t.name + " below first, so the drawings look like them." }));
       next.push(bigButton(busy === a.id + ":draw" ? "Starting…" : "Draw the comic", busy === a.id + ":draw", function () { drawComic(a, null, 0); }));
     }
-    if (st.action === "publish") next.push(bigButton("Send comic to the family", busy === a.id + ":publish", function () { publishComic(a, true, panels.length, total); }));
+    if (st.action === "video") {
+      next.push(narratorPicker(t, a));
+      next.push(bigButton(busy === a.id + ":video" ? "Starting…" : "Make the animated video", busy === a.id + ":video", function () { makeVideo(a); }));
+      next.push(h("button", { class: "btn btn-quiet", type: "button", disabled: busy === a.id + ":publish", onclick: function () { publishComic(a, true, panels.length, total, false); } }, "Skip the video, send only the comic"));
+    }
+    if (st.action === "publish") {
+      next.push(bigButton("Send to the family", busy === a.id + ":publish", function () { publishComic(a, true, panels.length, total, true); }));
+      if (videoReady && panels.some(function (m) { return Date.parse(m.createdAt) > Date.parse(v.createdAt); })) {
+        next.push(h("p", { class: "meta", text: "Some pictures changed after this video was made. Remake it to include them." }));
+      }
+    }
     if (st.action === "hide") next.push(h("button", { class: "btn btn-quiet", type: "button", disabled: busy === a.id + ":publish", onclick: function () { publishComic(a, false); } }, "Hide it from the family"));
+    if (st.extra === "video-too") next.push(h("button", { class: "btn btn-secondary", type: "button", disabled: busy === a.id + ":video", onclick: function () { makeVideo(a); } }, "Make an animated video too"));
+    const notes = script && script.video_notes && script.video_notes.length ? script.video_notes : null;
 
     return h("article", { class: "card story-card" + (isLatest ? " latest" : "") },
       isLatest ? h("p", { class: "eyebrow", text: "Latest question" }) : null,
       h("h2", { class: "story-q", text: a.question }),
       a.title ? h("p", { class: "meta", text: "Story title: " + a.title }) : null,
       stepper(st.step),
-      h("div", { class: "next " + st.tone }, h("p", { class: "eyebrow", text: st.todo ? "Your next step" : st.step === 4 ? "Finished" : "Status" }), next),
+      h("div", { class: "next " + st.tone }, h("p", { class: "eyebrow", text: st.todo ? "Your next step" : st.step === 6 ? "Finished" : "Status" }), next),
+      videoReady ? h("div", { class: "video-box" },
+        h("video", { src: v.url, controls: true, playsinline: true, preload: "metadata" }),
+        notes ? h("p", { class: "meta", text: "Voice-over problem: " + notes.join("; ") }) : null,
+        h("div", { class: "toolbar" },
+          narratorPicker(t, a),
+          h("button", { class: "btn btn-secondary", type: "button", disabled: busy === a.id + ":video", onclick: function () { makeVideo(a); } }, busy === a.id + ":video" ? "Starting…" : "Remake video"))) : null,
       script && panels.length ? panelGrid(t, a, script, panels, st) : null,
       a.story ? h("details", { class: "fold" }, h("summary", null, "Read the story"), h("p", { class: "story-text", text: a.story })) : null,
       moreOptions(t, a, script, panels));
@@ -220,7 +279,7 @@
         h("figcaption", null,
           h("span", { class: "sp-cap", text: (i + 1) + ". " + p.caption }),
           h("div", { class: "sp-actions" },
-            data.aiDrawing ? h("button", { class: "btn btn-secondary", type: "button", disabled: drawing || st.step < 2, onclick: function () { drawComic(a, i); } }, image ? "Redraw" : "Draw") : null,
+            data.aiDrawing ? h("button", { class: "btn btn-secondary", type: "button", disabled: drawing, onclick: function () { drawComic(a, i); } }, image ? "Redraw" : "Draw") : null,
             fileButton("Use my own", "image/png,image/jpeg,image/webp", busy === a.id + ":panel:" + i, function (f) { uploadPanel(t, a, i, f); }))));
     }));
   }
@@ -257,7 +316,7 @@
             return h("button", { class: "btn btn-quiet", type: "button", onclick: function (e) { copy(e.target, panelPrompt(script, i)); } }, "Copy prompt " + (i + 1));
           }),
           h("button", { class: "btn btn-quiet", type: "button", onclick: function (e) { copy(e.target, characterSheetPrompt(script)); } }, "Copy character-sheet prompt"))));
-      const other = t.media.filter(function (m) { return m.answerId === a.id && (m.kind === "comic" || m.kind === "video"); });
+      const other = t.media.filter(function (m) { return m.answerId === a.id && !m.appMade && (m.kind === "comic" || m.kind === "video"); });
       items.push(filmUpload(t, a, other, "A finished film or one-page comic for this story"));
     }
     items.push(h("div", { class: "box" }, h("b", { text: "Delete this story" }),
@@ -384,14 +443,24 @@
     busy = ""; setTimeout(load, 800);
   }
 
-  async function publishComic(a, publish, have, total) {
+  async function publishComic(a, publish, have, total, withVideo) {
     if (publish && have < total && !confirm(have + " of " + total + " pictures are ready. Send anyway?")) return;
     busy = a.id + ":publish"; render();
-    try { await api("POST", { action: "comic-publish", answerId: a.id, publish: publish }); } catch (e) { alert(e.message); }
+    try { await api("POST", { action: "comic-publish", answerId: a.id, publish: publish, withVideo: withVideo !== false }); } catch (e) { alert(e.message); }
     busy = ""; load();
   }
 
-  async function retry(a) {
+  async function makeVideo(a) {
+    const script = a.comicScript || {};
+    const narrator = narratorChoice[a.id] || (script.storyteller_voice === "male" ? "male" : "female");
+    busy = a.id + ":video"; render();
+    try { await api("POST", { action: "video-make", answerId: a.id, narrator: narrator }); } catch (e) { alert(e.message); }
+    busy = ""; setTimeout(load, 800);
+  }
+
+  async function retry(a, now) {
+    if (now && (a.answeredParts || []).length < (a.steps || []).length &&
+      !confirm("Not every question is answered yet. Write the story from the answers so far? The storyteller can't add more answers to this story after that.")) return;
     busy = a.id; render();
     try { await api("POST", { action: "retry", answerId: a.id }); } catch (e) { alert(e.message); }
     busy = ""; setTimeout(load, 1500);

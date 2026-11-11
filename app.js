@@ -271,6 +271,7 @@
   const answered = () => new Set(story() ? story().answeredParts : []);
   const isOpen = (s) => s.status === "collecting" || s.status === "failed";
   const openStories = () => state.stories.filter(isOpen);
+  const allAnswered = () => steps().length > 0 && answered().size >= steps().length;
 
   function applyData(data) {
     state.name = data.name;
@@ -463,6 +464,7 @@
       markAnswered(index);
       store(key, "");
       state.notice = { kind: "good", text: t.saved };
+      if (allAnswered()) { state.sending = false; go("finish"); return; }
     } catch (e) {
       state.notice = { kind: "bad", text: e.status === 409 ? t.alreadyWritten : t.sendFail };
     }
@@ -734,6 +736,7 @@
       state.sending = false;
       resetRecording();
       state.notice = { kind: "good", text: t.saved };
+      if (allAnswered()) { go("finish"); return; }
     } catch (e) {
       state.sending = false;
       state.notice = { kind: "bad", text: e.status === 409 ? t.alreadyWritten : t.sendFail };

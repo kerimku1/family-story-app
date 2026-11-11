@@ -2,7 +2,8 @@
 // The studio sees a story and its comic script only after the storyteller approved it.
 // It never gets the raw recordings.
 // GET                                                        → all storytellers with answers and media
-// POST { action: "retry", answerId }                          → run transcription + writing again
+// POST { action: "retry", answerId }                          → write the story (now, or again) from the answers so far
+// POST { action: "video-make", answerId, narrator? }           → make the animated video from the comic pictures
 // POST { action: "media-upload-url", storytellerId, answerId?, kind, mime, title, panelIndex? } → { mediaId, uploadUrl }
 //      kind "panel" = one comic panel image (no text in it; captions are added by the app)
 // POST { action: "media-publish", mediaId }                    → comic page / video: family can now see it
@@ -17,6 +18,7 @@ import { getStore } from "./_lib/store.js";
 import { send, fail, readJson, isAdmin, cleanText, inBackground } from "./_lib/http.js";
 import { processAnswer, mergeLifeCard } from "./_lib/pipeline.js";
 import { generateComic } from "./_lib/comic.js";
+import { makeVideo, APP_VIDEO } from "./_lib/video.js";
 import { env } from "./_lib/store.js";
 import { storyProgress, deleteStory, deleteStoryteller } from "./_lib/stories.js";
 
@@ -70,6 +72,7 @@ export default async function handler(req, res) {
         for (const m of media) {
           mediaOut.push({
             id: m.id, answerId: m.answer_id, kind: m.kind, title: m.title, status: m.status, panelIndex: m.panel_index,
+            appMade: m.kind === "video" && m.panel_index === APP_VIDEO, createdAt: m.created_at,
             url: ["published", "draft", "reference"].includes(m.status) ? await store.signedUrl("media", m.path, 60 * 60) : null
           });
         }
@@ -199,6 +202,20 @@ export default async function handler(req, res) {
       return send(res, 200, { ok: true });
     }
 
+    if (body.action === "video-make") {
+      const answer = await store.answerById(String(body.answerId || ""));
+      if (!answer) return fail(res, 404, "Answer not found");
+      if (answer.approval !== "approved") return fail(res, 400, "The storyteller has not approved this story");
+      const media = await store.listMediaForAnswer(answer.id);
+      if (!media.some((m) => m.kind === "panel" && (m.status === "draft" || m.status === "published"))) return fail(res, 400, "Draw the comic first");
+      if (media.some((m) => m.kind === "video" && m.panel_index === APP_VIDEO && m.status === "rendering" && Date.now() - Date.parse(m.created_at) < 10 * 60 * 1000)) {
+        return fail(res, 409, "Already making the video, please wait");
+      }
+      const narrator = ["female", "male"].includes(body.narrator) ? body.narrator : null;
+      await inBackground(makeVideo(store, answer.id, { narrator }));
+      return send(res, 200, { ok: true });
+    }
+
     if (body.action === "comic-publish") {
       const answer = await store.answerById(String(body.answerId || ""));
       if (!answer) return fail(res, 404, "Answer not found");
@@ -206,6 +223,10 @@ export default async function handler(req, res) {
       const panels = (await store.listMediaForAnswer(answer.id)).filter((m) => m.kind === "panel" && m.status !== "uploading");
       if (body.publish && !panels.length) return fail(res, 400, "Upload at least one panel first");
       for (const m of panels) await store.updateMedia(m.id, { status: body.publish ? "published" : "draft" });
+      // The app-made video goes with the comic, unless asked to send the comic alone.
+      const withVideo = body.withVideo !== false;
+      const videos = (await store.listMediaForAnswer(answer.id)).filter((m) => m.kind === "video" && m.panel_index === APP_VIDEO && (m.status === "draft" || m.status === "published"));
+      for (const m of videos) await store.updateMedia(m.id, { status: body.publish && withVideo ? "published" : "draft" });
       return send(res, 200, { ok: true });
     }
 
