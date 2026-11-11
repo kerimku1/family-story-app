@@ -125,7 +125,19 @@ export async function drawImage(prompt, images, { aspectRatio = "4:3", fetchImpl
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(Math.min(REQUEST_MS, left))
       });
-      if (res.status === 429 || res.status >= 500) {
+      if (res.status === 429) {
+        // Either "too many requests this minute" (wait and retry) or no quota at all (stop and say why).
+        const text = await res.text();
+        const msg = (() => { try { return JSON.parse(text).error.message || text; } catch { return text; } })();
+        if (/limit:\s*0\b|free.?tier/i.test(msg)) {
+          throw Object.assign(new Error("Gemini has no image quota for this API key. Image drawing needs billing turned on for the key (Google AI Studio → API keys → Set up billing). Google said: " + msg.slice(0, 200)), { final: true });
+        }
+        const delay = Number((text.match(/"retryDelay":\s*"(\d+(?:\.\d+)?)s"/) || [])[1]);
+        lastErr = new Error("Gemini rate limit (429): " + msg.slice(0, 160));
+        await new Promise((r) => setTimeout(r, Math.min(Number.isFinite(delay) ? delay * 1000 + 500 : 8000 * (attempt + 1), Math.max(0, deadline - Date.now() - 15000), 45000)));
+        continue;
+      }
+      if (res.status >= 500) {
         lastErr = new Error(`Gemini is busy (${res.status})`);
         await new Promise((r) => setTimeout(r, 4000 * (attempt + 1)));
         continue;
@@ -134,8 +146,9 @@ export async function drawImage(prompt, images, { aspectRatio = "4:3", fetchImpl
       return pickImage(await res.json());
     } catch (err) {
       lastErr = err;
+      if (err.final) break;
       if (err.name === "TimeoutError" || err.name === "AbortError") lastErr = new Error("Gemini took too long");
-      if (!/busy|timeout|too long|fetch failed|ECONNRESET/i.test(String(lastErr.message))) break;
+      if (!/busy|rate limit|timeout|too long|fetch failed|ECONNRESET/i.test(String(lastErr.message))) break;
     }
   }
   throw lastErr;

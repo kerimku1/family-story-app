@@ -635,3 +635,45 @@ test("drawing is not cancelled by a voice change, shows progress, and can draw o
     server.close();
   }
 });
+
+test("Gemini 429: no quota stops at once with a clear reason; a rate limit is retried", async () => {
+  const { server, store, apiLog, url } = await startTestServer(8789);
+  const { post, waitFor, tokens, latestStory } = client(url);
+  const auth = { authorization: "Bearer " + process.env.STUDIO_PASSWORD };
+  process.env.GEMINI_API_KEY = "test-gemini";
+  process.env.AUTO_VIDEO = "off";
+  try {
+    const { t } = tokens((await post("/api/create", { from: "M", name: "Мама", lang: "ru", ...DREAM })).body);
+    const id = (await latestStory(t)).id;
+    await post("/api/teller", { t, action: "text-answer", answerId: id, partIndex: 0, text: "Я родилась в ауле у реки." });
+    await post("/api/teller", { t, action: "finish", answerId: id });
+    await waitFor(() => store.db.answers[0].status === "ready");
+
+    globalThis.__GEMINI_429__ = "You exceeded your current quota. Quota exceeded for metric: generate_content_free_tier_requests, limit: 0, model: gemini-3.1-flash-image";
+    await post("/api/teller", { t, action: "approve", answerId: id, approval: "approved" });
+    await waitFor(() => store.db.answers[0].comic_status === "failed");
+    assert.match(store.db.answers[0].comic_error, /no image quota.*billing/);
+    assert.equal(apiLog.filter((c) => c.service === "gemini").length, 1, "no pointless retries");
+
+    // A per-minute limit: wait as Google asks, then it works.
+    let calls = 0;
+    globalThis.__GEMINI_429__ = null;
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async (input, init) => {
+      const u = typeof input === "string" ? input : input.url;
+      if (u.startsWith("https://generativelanguage.googleapis.com/") && calls++ === 0) {
+        return Response.json({ error: { code: 429, message: "Resource has been exhausted (e.g. check quota).", details: [{ retryDelay: "1s" }] } }, { status: 429 });
+      }
+      return realFetch(input, init);
+    };
+    assert.equal((await post("/api/studio", { action: "comic-draw", answerId: id }, auth)).status, 200);
+    await waitFor(() => ["ready", "failed", "partial"].includes(store.db.answers[0].comic_status) && store.db.answers[0].comic_status !== "failed", 400);
+    globalThis.fetch = realFetch;
+    assert.equal(store.db.answers[0].comic_status, "ready", store.db.answers[0].comic_error || "");
+  } finally {
+    globalThis.__GEMINI_429__ = null;
+    delete process.env.GEMINI_API_KEY;
+    delete process.env.AUTO_VIDEO;
+    server.close();
+  }
+});

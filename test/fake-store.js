@@ -152,6 +152,10 @@ export function installFakeApis(log = []) {
       }
       const n = log.filter((c) => c.service === "gemini").length;
       if (globalThis.__GEMINI_DELAY__) await new Promise((r) => setTimeout(r, globalThis.__GEMINI_DELAY__));
+      if (globalThis.__GEMINI_429__) {
+        return Response.json({ error: { code: 429, status: "RESOURCE_EXHAUSTED", message: globalThis.__GEMINI_429__,
+          details: [{ "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: "1s" }] } }, { status: 429 });
+      }
       // A real small PNG, a different colour each time so tests can tell images apart.
       const png = fakePicture(n);
       return Response.json({ candidates: [{ finishReason: "STOP", content: { role: "model", parts: [{ text: "here" }, { inlineData: { mimeType: "image/png", data: png.toString("base64") } }] } }] });
