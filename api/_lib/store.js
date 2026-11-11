@@ -16,7 +16,12 @@ export function env(name) {
 }
 
 function must(result, what) {
-  if (result.error) throw new Error(`${what}: ${result.error.message}`);
+  if (result.error) {
+    const msg = String(result.error.message || "");
+    // A missing column or table means a database update wasn't run.
+    const hint = /schema cache|does not exist|Could not find the/i.test(msg) ? " (the database is missing an update: run supabase/update_all.sql in Supabase SQL Editor)" : "";
+    throw new Error(`${what}: ${msg}${hint}`);
+  }
   return result.data;
 }
 

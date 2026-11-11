@@ -57,7 +57,7 @@ You need four accounts. Supabase and Vercel have free plans; ElevenLabs and Anth
 
 1. Go to supabase.com, sign up, and click **New project**. Choose a region close to your users and save the database password somewhere safe.
 2. When the project is ready, open **SQL Editor → New snippet**. Paste everything from `supabase/schema.sql` and click **Run**. You should see "Success".
-   - **Already set up before?** Instead, run the update files you haven't run yet, in order: `supabase/002_panels_and_voice.sql`, `supabase/003_auto_comics.sql`, then `supabase/004_story_parts.sql` (one main question + lead-up questions; your old answers are kept as one-part stories).
+   - **Already set up before?** Run `supabase/update_all.sql` (all updates in one file, safe to run again). Or run the update files you haven't run yet, in order: `supabase/002_panels_and_voice.sql`, `supabase/003_auto_comics.sql`, then `supabase/004_story_parts.sql` (one main question + lead-up questions; your old answers are kept as one-part stories).
 3. Open **Project Settings → API Keys** (or **API**). Copy:
    - the **Project URL** → this is `SUPABASE_URL`
    - the **secret** key (older projects call it **service_role**) → this is `SUPABASE_SECRET_KEY`. Keep it secret; never put it in browser code.
