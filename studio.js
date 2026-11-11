@@ -56,6 +56,7 @@
     error = "";
     try {
       data = await api("GET");
+      data.loadedAt = Date.now();
       clearTimeout(pollTimer);
       const waiting = data.storytellers.some(function (t) {
         return t.media.some(function (m) { return m.appMade && m.status === "rendering"; }) ||
@@ -167,6 +168,11 @@
   }
 
   const FRESH_MS = 10 * 60 * 1000;
+  // Ages come from the server in seconds (as of loading); add the time since the page loaded.
+  function ageMs(sec) {
+    if (sec === null || sec === undefined) return Infinity;
+    return sec * 1000 + (Date.now() - (data.loadedAt || Date.now()));
+  }
   function videoOf(t, a) {
     const vids = t.media.filter(function (m) { return m.answerId === a.id && m.appMade; });
     return vids[vids.length - 1] || null;
@@ -183,8 +189,8 @@
         text: t.name + " answered " + answered + " of " + total + " questions. Write the story from these answers now" + (answered < total ? ", or wait for the rest." : ".") };
     }
     if (a.status === "uploaded" || a.status === "processing") {
-      const waited = Math.floor((Date.now() - Date.parse(a.updatedAt || a.createdAt)) / 60000);
-      if (waited >= 6) return { step: 1, tone: "bad", short: "Stuck", todo: true, action: "retry", text: "Writing the story seems to have stopped (" + waited + " minutes). Tap Try again." };
+      const waited = Math.floor(ageMs(a.updatedAgeSec) / 60000);
+      if (!(waited < 6)) return { step: 1, tone: "bad", short: "Stuck", todo: true, action: "retry", text: "Writing the story seems to have stopped. Tap Try again." };
       return { step: 1, tone: "wait", short: "Writing", text: "Writing the story… usually about a minute. This page refreshes by itself." };
     }
     if (a.status === "failed") return { step: 1, tone: "bad", short: "Failed", todo: true, text: "The story couldn't be written. " + (a.error || ""), action: "retry" };
@@ -194,9 +200,9 @@
     const comicLive = panels.some(function (m) { return m.status === "published"; });
     const pictures = ((a.comicScript || {}).panels || []).length;
     if (a.comicStatus === "drawing") {
-      const minutes = Math.floor((Date.now() - Date.parse(a.comicStartedAt || 0)) / 60000);
-      if (minutes >= 6) return { step: 3, tone: "bad", short: "Stuck", todo: true, action: "missing",
-        text: "The drawing seems to have stopped (started " + minutes + " minutes ago). " + (panels.length ? panels.length + " of " + pictures + " pictures are drawn. " : "") + "Tap Try again." };
+      const minutes = Math.floor(ageMs(a.comicAgeSec) / 60000);
+      if (!(minutes < 6)) return { step: 3, tone: "bad", short: "Stuck", todo: true, action: "missing",
+        text: "The drawing seems to have stopped" + (isFinite(minutes) ? " (started " + minutes + " minutes ago)" : "") + ". " + (panels.length ? panels.length + " of " + pictures + " pictures are drawn. " : "") + "Tap Try again." };
       return { step: 3, tone: "wait", short: "Drawing", text: "Drawing the comic… usually 1–3 minutes" + (a.comicError ? " (" + a.comicError + ")" : "") + ". The video is made right after. This page refreshes by itself." };
     }
     if (panels.length && panels.length < pictures) {
@@ -209,7 +215,7 @@
     }
     const partial = a.comicStatus === "partial" ? (a.comicError || "Some pictures couldn't be drawn.") : "";
     const v = videoOf(t, a);
-    if (v && v.status === "rendering" && Date.now() - Date.parse(v.createdAt) < FRESH_MS) return { step: 4, tone: "wait", short: "Making video", text: "Making the animated video… usually 1–2 minutes. This page refreshes by itself." };
+    if (v && v.status === "rendering" && ageMs(v.ageSec) < FRESH_MS) return { step: 4, tone: "wait", short: "Making video", text: "Making the animated video… usually 1–2 minutes. This page refreshes by itself." };
     const hasVideo = v && (v.status === "draft" || v.status === "published");
     if (!hasVideo) {
       if (comicLive) return { step: 6, tone: "good", short: "On family page", text: "Done. The family can see the comic.", action: "hide", extra: "video-too" };
@@ -269,7 +275,7 @@
     }
     if (st.action === "publish") {
       next.push(bigButton("Send to the family", busy === a.id + ":publish", function () { publishComic(a, true, panels.length, total, true); }));
-      if (videoReady && panels.some(function (m) { return Date.parse(m.createdAt) > Date.parse(v.createdAt); })) {
+      if (videoReady && panels.some(function (m) { return m.ageSec < v.ageSec; })) {
         next.push(h("p", { class: "meta", text: "Some pictures changed after this video was made. Remake it to include them." }));
       }
     }

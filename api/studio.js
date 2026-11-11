@@ -26,6 +26,8 @@ export const config = { maxDuration: 300 };
 
 const MEDIA_EXT = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "video/mp4": "mp4", "video/webm": "webm" };
 
+const ageSec = (iso) => (iso ? Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000)) : null);
+
 function answerForStudio(a, parts) {
   const progress = storyProgress(a, parts);
   const approved = a.approval === "approved";
@@ -46,6 +48,8 @@ function answerForStudio(a, parts) {
     comicStartedAt: a.comic_started_at || null,
     createdAt: a.created_at,
     updatedAt: a.updated_at || a.created_at,
+    updatedAgeSec: ageSec(a.updated_at || a.created_at),
+    comicAgeSec: ageSec(a.comic_started_at),
     title: approved ? a.title : null,
     story: approved ? a.story : null,
     details: approved ? a.details : null,
@@ -73,7 +77,7 @@ export default async function handler(req, res) {
         for (const m of media) {
           mediaOut.push({
             id: m.id, answerId: m.answer_id, kind: m.kind, title: m.title, status: m.status, panelIndex: m.panel_index,
-            appMade: m.kind === "video" && m.panel_index === APP_VIDEO, createdAt: m.created_at,
+            appMade: m.kind === "video" && m.panel_index === APP_VIDEO, createdAt: m.created_at, ageSec: ageSec(m.created_at),
             url: ["published", "draft", "reference"].includes(m.status) ? await store.signedUrl("media", m.path, 60 * 60) : null
           });
         }
