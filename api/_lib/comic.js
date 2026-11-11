@@ -12,7 +12,17 @@ import { ffmpegPath, run } from "./clips.js";
 const DEFAULT_MODEL = "gemini-3.1-flash-image-preview";
 const MAX_PHOTOS = 3;
 const PARALLEL = 3;            // panels drawn at the same time
-const STALE_MS = 8 * 60 * 1000; // a "drawing" job older than this is treated as stuck
+export const STALE_MS = 6 * 60 * 1000; // a "drawing" job older than this is treated as stuck
+// The server stops a job after 300 s, so drawing gives up in time to save what it has and say so.
+const BUDGET_MS = 230 * 1000;
+const REQUEST_MS = 100 * 1000;  // longest wait for one picture
+
+// Only what changes the pictures. Voice clips and video notes change the script too,
+// but must not cancel a drawing that is running.
+export function drawingKey(script) {
+  const s = script || {};
+  return JSON.stringify([s.style_notes, s.characters, (s.panels || []).map((p) => [p.setting, p.action])]);
+}
 
 export function autoComicsOn() {
   return Boolean(env("GEMINI_API_KEY")) && env("AUTO_COMICS").toLowerCase() !== "off";
@@ -87,7 +97,7 @@ function pickImage(data) {
   throw new Error("Gemini did not draw the image (" + reason + ")");
 }
 
-export async function drawImage(prompt, images, { aspectRatio = "4:3", fetchImpl = fetch } = {}) {
+export async function drawImage(prompt, images, { aspectRatio = "4:3", fetchImpl = fetch, deadline = Infinity } = {}) {
   const key = env("GEMINI_API_KEY");
   if (!key) throw new Error("GEMINI_API_KEY is not set");
   const model = env("GEMINI_IMAGE_MODEL") || DEFAULT_MODEL;
@@ -106,12 +116,14 @@ export async function drawImage(prompt, images, { aspectRatio = "4:3", fetchImpl
   };
   let lastErr;
   for (let attempt = 0; attempt < 3; attempt++) {
+    const left = deadline - Date.now();
+    if (left < 15000) { lastErr = lastErr || new Error("ran out of time"); break; }
     try {
       const res = await fetchImpl(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
         method: "POST",
         headers: { "x-goog-api-key": key, "content-type": "application/json" },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(150000)
+        signal: AbortSignal.timeout(Math.min(REQUEST_MS, left))
       });
       if (res.status === 429 || res.status >= 500) {
         lastErr = new Error(`Gemini is busy (${res.status})`);
@@ -122,7 +134,8 @@ export async function drawImage(prompt, images, { aspectRatio = "4:3", fetchImpl
       return pickImage(await res.json());
     } catch (err) {
       lastErr = err;
-      if (!/busy|timeout|fetch failed|ECONNRESET/i.test(String(err.message))) break;
+      if (err.name === "TimeoutError" || err.name === "AbortError") lastErr = new Error("Gemini took too long");
+      if (!/busy|timeout|too long|fetch failed|ECONNRESET/i.test(String(lastErr.message))) break;
     }
   }
   throw lastErr;
@@ -189,6 +202,7 @@ async function loadSheet(store, answerId) {
 
 async function pool(items, limit, worker) {
   const results = new Array(items.length);
+  if (!items.length) return results;
   let next = 0;
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
     while (next < items.length) {
@@ -202,6 +216,7 @@ async function pool(items, limit, worker) {
 
 // Draw the whole comic, or only the listed panels (panelIndexes) when redrawing.
 // newSheet: draw a fresh character sheet even if one exists.
+// Each picture is saved as soon as it is drawn, so nothing is lost if the server stops the job.
 export async function generateComic(store, answerId, { panelIndexes = null, newSheet = false, force = false, fetchImpl = fetch } = {}) {
   let answer = await store.answerById(answerId);
   if (!answer || answer.approval !== "approved" || !answer.comic_script) return;
@@ -209,50 +224,62 @@ export async function generateComic(store, answerId, { panelIndexes = null, newS
   if (!force && answer.comic_status === "drawing" && Date.now() - startedAt < STALE_MS) return; // already running
 
   const script = answer.comic_script;
+  const key = drawingKey(script);
   const total = (script.panels || []).length;
   const wanted = (panelIndexes || [...Array(total).keys()]).filter((i) => Number.isInteger(i) && i >= 0 && i < total);
   if (!wanted.length) return;
 
+  const deadline = Date.now() + BUDGET_MS;
   const myStart = new Date().toISOString();
   await store.updateAnswer(answerId, { comic_status: "drawing", comic_error: null, comic_started_at: myStart });
-  const stillMine = async () => {
+  // Still our job? (Not replaced by a newer drawing, and the story wasn't rewritten.)
+  const check = async () => {
     const now = await store.answerById(answerId);
-    return now && now.comic_started_at === myStart && JSON.stringify(now.comic_script) === JSON.stringify(script) ? now : null;
+    if (!now || now.comic_started_at !== myStart) return { mine: false, now };
+    return { mine: drawingKey(now.comic_script) === key, now };
+  };
+  const giveUp = async (now) => {
+    if (now && now.comic_started_at === myStart) {
+      await store.updateAnswer(answerId, { comic_status: "failed", comic_error: "The story changed while drawing. Tap Try again." });
+    }
   };
   try {
     const teller = await store.storytellerById(answer.storyteller_id);
     const photos = await loadPhotos(store, answer.storyteller_id);
+    const before = (await store.listMediaForAnswer(answerId)).filter((m) => m.kind === "panel");
+    const live = before.some((m) => m.status === "published");
 
     let sheet = newSheet || !panelIndexes ? null : await loadSheet(store, answerId);
     if (!sheet) {
-      sheet = await drawImage(sheetPrompt(script, teller.name, photos.length), photos, { aspectRatio: "3:2", fetchImpl });
+      sheet = await drawImage(sheetPrompt(script, teller.name, photos.length), photos, { aspectRatio: "3:2", fetchImpl, deadline });
       const old = (await store.listMediaForAnswer(answerId)).filter((m) => m.kind === "sheet");
       await saveImage(store, answer, "sheet", null, sheet, "reference");
       await removeMedia(store, old);
     }
 
-    const results = await pool(wanted, PARALLEL, async (index) => {
-      const prompt = panelPrompt(script, index, teller.name, { hasSheet: true, photoCount: photos.length });
-      return drawImage(prompt, [sheet, ...photos], { aspectRatio: "4:3", fetchImpl });
+    const failed = [];
+    let saved = 0;
+    await pool(wanted, PARALLEL, async (index) => {
+      try {
+        const prompt = panelPrompt(script, index, teller.name, { hasSheet: true, photoCount: photos.length });
+        const image = await drawImage(prompt, [sheet, ...photos], { aspectRatio: "4:3", fetchImpl, deadline });
+        const { mine } = await check();
+        if (!mine) return;
+        const status = live || (autoPublishOn() && !panelIndexes) ? "published" : "draft";
+        await saveImage(store, answer, "panel", index, image, status);
+        await removeMedia(store, before.filter((m) => m.panel_index === index));
+        saved++;
+        await store.updateAnswer(answerId, { comic_error: `${saved} of ${wanted.length} pictures drawn` });
+      } catch (err) {
+        failed.push(`panel ${index + 1}: ${err.message}`);
+      }
     });
 
-    // Story rewritten or a newer drawing started meanwhile? Then these pictures no longer fit.
-    answer = await stillMine();
-    if (!answer) return;
-
-    const existing = (await store.listMediaForAnswer(answerId)).filter((m) => m.kind === "panel");
+    const { mine, now } = await check();
+    if (!mine) return giveUp(now);
+    answer = now;
     // A full redraw also drops panels the new script no longer has.
-    if (!panelIndexes) await removeMedia(store, existing.filter((m) => m.panel_index >= total));
-    const live = existing.some((m) => m.status === "published");
-    const failed = [];
-    for (let k = 0; k < wanted.length; k++) {
-      const index = wanted[k];
-      const r = results[k];
-      if (!r.ok) { failed.push(`panel ${index + 1}: ${r.error.message}`); continue; }
-      const status = live || (autoPublishOn() && !panelIndexes) ? "published" : "draft";
-      await saveImage(store, answer, "panel", index, r.value, status);
-      await removeMedia(store, existing.filter((m) => m.panel_index === index));
-    }
+    if (!panelIndexes) await removeMedia(store, before.filter((m) => m.panel_index >= total));
 
     if (!failed.length && autoPublishOn() && !panelIndexes) {
       for (const m of (await store.listMediaForAnswer(answerId)).filter((x) => x.kind === "panel")) {
@@ -261,10 +288,13 @@ export async function generateComic(store, answerId, { panelIndexes = null, newS
     }
     await store.updateAnswer(answerId, {
       comic_status: failed.length === wanted.length ? "failed" : failed.length ? "partial" : "ready",
-      comic_error: failed.length ? failed.join("; ").slice(0, 500) : null
+      comic_error: failed.length ? failed.sort().join("; ").slice(0, 500) : null
     });
   } catch (err) {
     console.error("generateComic failed", answerId, err);
-    if (await stillMine()) await store.updateAnswer(answerId, { comic_status: "failed", comic_error: String(err.message || err).slice(0, 500) });
+    const { now } = await check().catch(() => ({}));
+    if (now && now.comic_started_at === myStart) {
+      await store.updateAnswer(answerId, { comic_status: "failed", comic_error: String(err.message || err).slice(0, 500) });
+    }
   }
 }

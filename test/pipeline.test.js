@@ -584,3 +584,54 @@ test("animated video: made after the comic, narrator or real voice, sent with th
     server.close();
   }
 });
+
+test("drawing is not cancelled by a voice change, shows progress, and can draw only the missing pictures", async () => {
+  const { server, store, apiLog, url } = await startTestServer(8792);
+  const { post, waitFor, tokens, latestStory } = client(url);
+  const auth = { authorization: "Bearer " + process.env.STUDIO_PASSWORD };
+  process.env.GEMINI_API_KEY = "test-gemini";
+  process.env.AUTO_VIDEO = "off";
+  try {
+    const { t } = tokens((await post("/api/create", { from: "M", name: "Мама", lang: "ru", ...DREAM })).body);
+    const id = (await latestStory(t)).id;
+    await post("/api/teller", { t, action: "text-answer", answerId: id, partIndex: 0, text: "Я родилась в ауле у реки." });
+    await post("/api/teller", { t, action: "finish", answerId: id });
+    await waitFor(() => store.db.answers[0].status === "ready");
+
+    globalThis.__GEMINI_DELAY__ = 150;
+    await post("/api/teller", { t, action: "approve", answerId: id, approval: "approved" });
+    await waitFor(() => store.db.answers[0].comic_status === "drawing");
+    // Meanwhile the script gets voice-clip paths (as when the storyteller turns their voice on).
+    const a = store.db.answers[0];
+    a.comic_script = { ...a.comic_script, panels: a.comic_script.panels.map((p, i) => ({ ...p, clip_path: "x/clip" + i + ".m4a" })) };
+    await waitFor(() => store.db.answers[0].comic_status !== "drawing", 300);
+    globalThis.__GEMINI_DELAY__ = 0;
+    assert.equal(store.db.answers[0].comic_status, "ready", store.db.answers[0].comic_error || "");
+    const panels = () => store.db.media.filter((m) => m.answer_id === id && m.kind === "panel");
+    assert.equal(panels().length, 2);
+
+    // One picture goes missing: only that one is drawn again, with the saved character sheet.
+    const lost = panels().find((m) => m.panel_index === 1);
+    store.db.media = store.db.media.filter((m) => m.id !== lost.id);
+    const calls = apiLog.filter((c) => c.service === "gemini").length;
+    assert.equal((await post("/api/studio", { action: "comic-draw", answerId: id, missing: true }, auth)).status, 200);
+    await waitFor(() => panels().length === 2 && store.db.answers[0].comic_status === "ready");
+    assert.equal(apiLog.filter((c) => c.service === "gemini").length, calls + 1, "only the missing picture");
+    assert.equal(store.db.answers[0].comic_error, null);
+
+    // A rewrite during drawing stops it with a clear message instead of hanging on "drawing".
+    globalThis.__GEMINI_DELAY__ = 150;
+    await post("/api/studio", { action: "comic-draw", answerId: id }, auth);
+    await waitFor(() => store.db.answers[0].comic_status === "drawing");
+    const b = store.db.answers[0];
+    b.comic_script = { ...b.comic_script, panels: b.comic_script.panels.map((p) => ({ ...p, action: p.action + " (rewritten)" })) };
+    await waitFor(() => store.db.answers[0].comic_status !== "drawing", 300);
+    assert.equal(store.db.answers[0].comic_status, "failed");
+    assert.match(store.db.answers[0].comic_error, /changed while drawing/);
+  } finally {
+    globalThis.__GEMINI_DELAY__ = 0;
+    delete process.env.GEMINI_API_KEY;
+    delete process.env.AUTO_VIDEO;
+    server.close();
+  }
+});

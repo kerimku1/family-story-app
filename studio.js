@@ -188,7 +188,17 @@
     if (a.approval !== "approved") return { step: 2, tone: "wait", short: "Waiting for OK", text: "The story is written. " + t.name + " now reads it on their link and taps “OK to use”. Then the comic and video are made automatically." };
     const panels = panelsOf(t, a);
     const comicLive = panels.some(function (m) { return m.status === "published"; });
-    if (a.comicStatus === "drawing") return { step: 3, tone: "wait", short: "Drawing", text: "Drawing the comic… usually 1–2 minutes. The video is made right after. This page refreshes by itself." };
+    const pictures = ((a.comicScript || {}).panels || []).length;
+    if (a.comicStatus === "drawing") {
+      const minutes = Math.floor((Date.now() - Date.parse(a.comicStartedAt || 0)) / 60000);
+      if (minutes >= 6) return { step: 3, tone: "bad", short: "Stuck", todo: true, action: "missing",
+        text: "The drawing seems to have stopped (started " + minutes + " minutes ago). " + (panels.length ? panels.length + " of " + pictures + " pictures are drawn. " : "") + "Tap Try again." };
+      return { step: 3, tone: "wait", short: "Drawing", text: "Drawing the comic… usually 1–3 minutes" + (a.comicError ? " (" + a.comicError + ")" : "") + ". The video is made right after. This page refreshes by itself." };
+    }
+    if (panels.length && panels.length < pictures) {
+      return { step: 3, tone: "bad", short: panels.length + "/" + pictures + " pictures", todo: true, action: "missing",
+        text: panels.length + " of " + pictures + " pictures are drawn. " + (a.comicError ? "Problem: " + a.comicError + ". " : "") + "Draw the missing ones." };
+    }
     if (!panels.length) {
       if (!data.aiDrawing) return { step: 3, tone: "todo", short: "Needs comic", todo: true, text: "Automatic drawing is off (add GEMINI_API_KEY in Vercel). You can still upload your own pictures under “More options”." };
       return { step: 3, tone: "todo", short: "Draw comic", todo: true, text: a.comicStatus === "failed" ? "Drawing failed: " + (a.comicError || "") + " Try again." : "Approved! Draw the comic.", action: "draw" };
@@ -247,6 +257,7 @@
       if (!hasPhotos) next.push(h("p", { class: "meta", text: "Tip: add a photo of " + t.name + " below first, so the drawings look like them." }));
       next.push(bigButton(busy === a.id + ":draw" ? "Starting…" : "Draw the comic", busy === a.id + ":draw", function () { drawComic(a, null, 0); }));
     }
+    if (st.action === "missing") next.push(bigButton(busy === a.id + ":draw" ? "Starting…" : (panels.length ? "Draw the missing pictures" : "Try again"), busy === a.id + ":draw", function () { drawMissing(a); }));
     if (st.action === "video") {
       next.push(narratorPicker(t, a));
       next.push(bigButton(busy === a.id + ":video" ? "Starting…" : "Make the animated video", busy === a.id + ":video", function () { makeVideo(a); }));
@@ -462,6 +473,13 @@
     busy = a.id + ":publish"; render();
     try { await api("POST", { action: "comic-publish", answerId: a.id, publish: publish, withVideo: withVideo !== false }); } catch (e) { alert(e.message); }
     busy = ""; load();
+  }
+
+  async function drawMissing(a) {
+    busy = a.id + ":draw"; render();
+    try { await api("POST", { action: "comic-draw", answerId: a.id, missing: true }); }
+    catch (e) { alert(e.message); }
+    busy = ""; setTimeout(load, 800);
   }
 
   async function makeVideo(a) {

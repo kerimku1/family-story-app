@@ -17,8 +17,8 @@
 import { getStore } from "./_lib/store.js";
 import { send, fail, readJson, isAdmin, cleanText, inBackground } from "./_lib/http.js";
 import { processAnswer, mergeLifeCard } from "./_lib/pipeline.js";
-import { generateComic } from "./_lib/comic.js";
-import { makeVideo, APP_VIDEO } from "./_lib/video.js";
+import { generateComic, STALE_MS } from "./_lib/comic.js";
+import { makeVideo, APP_VIDEO, comicThenVideo } from "./_lib/video.js";
 import { env } from "./_lib/store.js";
 import { storyProgress, deleteStory, deleteStoryteller } from "./_lib/stories.js";
 
@@ -182,10 +182,19 @@ export default async function handler(req, res) {
       if (!answer.comic_script || !(answer.comic_script.panels || []).length) return fail(res, 400, "This story has no comic script yet");
       const one = body.panelIndex === undefined || body.panelIndex === null ? null : Number(body.panelIndex);
       if (one !== null && (!Number.isInteger(one) || one < 0 || one >= answer.comic_script.panels.length)) return fail(res, 400, "Bad panel");
-      if (answer.comic_status === "drawing" && Date.now() - Date.parse(answer.comic_started_at || 0) < 8 * 60 * 1000) {
+      if (answer.comic_status === "drawing" && Date.now() - Date.parse(answer.comic_started_at || 0) < STALE_MS) {
         return fail(res, 409, "Already drawing, please wait");
       }
-      await inBackground(generateComic(store, answer.id, one === null ? { newSheet: true } : { panelIndexes: [one] }));
+      let options = one === null ? { newSheet: true } : { panelIndexes: [one] };
+      if (body.missing) {
+        // Keep the pictures that are already drawn; draw the rest with the same character sheet.
+        const media = await store.listMediaForAnswer(answer.id);
+        const have = new Set(media.filter((m) => m.kind === "panel" && (m.status === "draft" || m.status === "published")).map((m) => m.panel_index));
+        const missing = answer.comic_script.panels.map((_, i) => i).filter((i) => !have.has(i));
+        const hasSheet = media.some((m) => m.kind === "sheet" && m.status === "reference");
+        options = missing.length && have.size && hasSheet ? { panelIndexes: missing, force: true } : { newSheet: true, force: true };
+      }
+      await inBackground(comicThenVideo(store, answer.id, options));
       return send(res, 200, { ok: true });
     }
 

@@ -151,6 +151,7 @@ export function installFakeApis(log = []) {
         return Response.json({ candidates: [{ finishReason: "SAFETY", content: { parts: [] } }] });
       }
       const n = log.filter((c) => c.service === "gemini").length;
+      if (globalThis.__GEMINI_DELAY__) await new Promise((r) => setTimeout(r, globalThis.__GEMINI_DELAY__));
       // A real small PNG, a different colour each time so tests can tell images apart.
       const png = fakePicture(n);
       return Response.json({ candidates: [{ finishReason: "STOP", content: { role: "model", parts: [{ text: "here" }, { inlineData: { mimeType: "image/png", data: png.toString("base64") } }] } }] });
