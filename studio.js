@@ -182,7 +182,11 @@
       return { step: 0, tone: "todo", short: "Answered " + answered + "/" + total, todo: true, action: "write",
         text: t.name + " answered " + answered + " of " + total + " questions. Write the story from these answers now" + (answered < total ? ", or wait for the rest." : ".") };
     }
-    if (a.status === "uploaded" || a.status === "processing") return { step: 1, tone: "wait", short: "Writing", text: "Writing the story… usually about a minute. This page refreshes by itself." };
+    if (a.status === "uploaded" || a.status === "processing") {
+      const waited = Math.floor((Date.now() - Date.parse(a.updatedAt || a.createdAt)) / 60000);
+      if (waited >= 6) return { step: 1, tone: "bad", short: "Stuck", todo: true, action: "retry", text: "Writing the story seems to have stopped (" + waited + " minutes). Tap Try again." };
+      return { step: 1, tone: "wait", short: "Writing", text: "Writing the story… usually about a minute. This page refreshes by itself." };
+    }
     if (a.status === "failed") return { step: 1, tone: "bad", short: "Failed", todo: true, text: "The story couldn't be written. " + (a.error || ""), action: "retry" };
     if (a.approval === "hidden") return { step: 2, tone: "wait", short: "Private", text: t.name + " chose to keep this story private. Nothing to do." };
     if (a.approval !== "approved") return { step: 2, tone: "wait", short: "Waiting for OK", text: "The story is written. " + t.name + " now reads it on their link and taps “OK to use”. Then the comic and video are made automatically." };

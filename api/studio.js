@@ -45,6 +45,7 @@ function answerForStudio(a, parts) {
     comicError: a.comic_error || null,
     comicStartedAt: a.comic_started_at || null,
     createdAt: a.created_at,
+    updatedAt: a.updated_at || a.created_at,
     title: approved ? a.title : null,
     story: approved ? a.story : null,
     details: approved ? a.details : null,

@@ -47,7 +47,7 @@ export function createFakeStore(baseUrl = "http://localhost") {
     async createAnswer(row) { return insert("answers", { approval: "waiting", allow_voice: false, ...row }); },
     async answerById(id) { return clone(db.answers.find((r) => r.id === id)); },
     async listAnswers(sid) { return clone(db.answers.filter((r) => r.storyteller_id === sid).sort(byCreated)); },
-    async updateAnswer(id, patch) { return update("answers", id, patch); },
+    async updateAnswer(id, patch) { return update("answers", id, { ...patch, updated_at: now() }); },
     async deleteAnswer(id) { remove("answers", id); db.parts = db.parts.filter((r) => r.answer_id !== id); },
 
     async createPart(row) { return insert("parts", row); },
