@@ -8,6 +8,6 @@ alter table answers add column if not exists allow_voice boolean not null defaul
 alter table media add column if not exists panel_index int;
 
 alter table media drop constraint if exists media_kind_check;
-alter table media add constraint media_kind_check check (kind in ('comic', 'video', 'panel'));
+alter table media add constraint media_kind_check check (kind in ('comic', 'video', 'panel', 'photo', 'sheet'));
 
 create index if not exists media_answer_idx on media (answer_id, panel_index);
