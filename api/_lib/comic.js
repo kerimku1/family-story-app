@@ -17,6 +17,9 @@ export const STALE_MS = 6 * 60 * 1000; // a "drawing" job older than this is tre
 const BUDGET_MS = 230 * 1000;
 const REQUEST_MS = 100 * 1000;  // longest wait for one picture
 
+// The database gives times back in its own format ("…+00:00", not "…Z"), so compare the moments.
+const sameTime = (a, b) => Boolean(a && b) && Date.parse(a) === Date.parse(b);
+
 // Only what changes the pictures. Voice clips and video notes change the script too,
 // but must not cancel a drawing that is running.
 export function drawingKey(script) {
@@ -248,11 +251,11 @@ export async function generateComic(store, answerId, { panelIndexes = null, newS
   // Still our job? (Not replaced by a newer drawing, and the story wasn't rewritten.)
   const check = async () => {
     const now = await store.answerById(answerId);
-    if (!now || now.comic_started_at !== myStart) return { mine: false, now };
+    if (!now || !sameTime(now.comic_started_at, myStart)) return { mine: false, now };
     return { mine: drawingKey(now.comic_script) === key, now };
   };
   const giveUp = async (now) => {
-    if (now && now.comic_started_at === myStart) {
+    if (now && sameTime(now.comic_started_at, myStart)) {
       await store.updateAnswer(answerId, { comic_status: "failed", comic_error: "The story changed while drawing. Tap Try again." });
     }
   };
@@ -306,7 +309,7 @@ export async function generateComic(store, answerId, { panelIndexes = null, newS
   } catch (err) {
     console.error("generateComic failed", answerId, err);
     const { now } = await check().catch(() => ({}));
-    if (now && now.comic_started_at === myStart) {
+    if (now && sameTime(now.comic_started_at, myStart)) {
       await store.updateAnswer(answerId, { comic_status: "failed", comic_error: String(err.message || err).slice(0, 500) });
     }
   }

@@ -13,14 +13,22 @@ export function createFakeStore(baseUrl = "http://localhost") {
   let lastMs = 0;
   const now = () => { lastMs = Math.max(Date.now(), lastMs + 1); return new Date(lastMs).toISOString(); };
   const insert = (table, row) => {
-    const r = { id: randomUUID(), created_at: now(), ...row };
+    const r = pgTimes({ id: randomUUID(), created_at: now(), ...row });
     db[table].push(r);
     return clone(r);
+  };
+  // Like Postgres: timestamps come back as "2026-11-12T20:57:10.123+00:00", not as the "…Z" string sent.
+  const pgTimes = (row) => {
+    const out = { ...row };
+    for (const [k, v] of Object.entries(out)) {
+      if (/_at$/.test(k) && typeof v === "string" && /Z$/.test(v)) out[k] = new Date(v).toISOString().replace("Z", "+00:00");
+    }
+    return out;
   };
   const update = (table, id, patch) => {
     const r = db[table].find((x) => x.id === id);
     if (!r) throw new Error(`${table} ${id} not found`);
-    Object.assign(r, patch);
+    Object.assign(r, pgTimes(patch));
     return clone(r);
   };
   const remove = (table, id) => { db[table] = db[table].filter((x) => x.id !== id); };
