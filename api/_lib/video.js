@@ -53,7 +53,36 @@ async function audioSeconds(bin, file) {
 }
 
 // ElevenLabs text to speech → mp3 bytes.
-export async function speak(text, narrator, { fetchImpl = fetch } = {}) {
+// ElevenLabs limits how many voice requests run at once (2 on the free plan), so take turns
+// and wait a little when it says "too many concurrent requests".
+const SPEAK_AT_ONCE = 2;
+let speaking = 0;
+const queue = [];
+async function takeTurn() {
+  if (speaking < SPEAK_AT_ONCE) { speaking++; return; }
+  await new Promise((resolve) => queue.push(resolve));
+}
+function endTurn() {
+  const next = queue.shift();
+  if (next) next(); else speaking--;
+}
+
+export async function speak(text, narrator, options = {}) {
+  await takeTurn();
+  try {
+    for (let attempt = 0; ; attempt++) {
+      try { return await speakOnce(text, narrator, options); }
+      catch (err) {
+        if (!err.busy || attempt >= 3) throw err;
+        await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+      }
+    }
+  } finally {
+    endTurn();
+  }
+}
+
+async function speakOnce(text, narrator, { fetchImpl = fetch } = {}) {
   const key = env("ELEVENLABS_API_KEY");
   if (!key) throw new Error("ELEVENLABS_API_KEY is not set");
   const voice = env(narrator === "male" ? "ELEVENLABS_VOICE_MALE" : "ELEVENLABS_VOICE_FEMALE") || VOICES[narrator] || VOICES.female;
@@ -65,7 +94,7 @@ export async function speak(text, narrator, { fetchImpl = fetch } = {}) {
   if (!res.ok) {
     const body = (await res.text()).slice(0, 200);
     if (res.status === 401) throw new Error("ElevenLabs key has no text-to-speech permission (" + body + ")");
-    throw new Error(`ElevenLabs text-to-speech error (${res.status}): ${body}`);
+    throw Object.assign(new Error(`ElevenLabs text-to-speech error (${res.status}): ${body}`), { busy: res.status === 429 && /concurrent|rate|too many/i.test(body) });
   }
   return Buffer.from(await res.arrayBuffer());
 }

@@ -538,6 +538,7 @@ test("animated video: made after the comic, narrator or real voice, sent with th
     assert.ok(file.data.length > 10000, "a real video file");
     const tts = apiLog.filter((c) => c.service === "tts");
     assert.equal(tts.length, 2, "narrator reads each picture (typed story, no real voice)");
+    assert.equal(apiLog.filter((c) => c.service === "tts-refused").length, 0, "never more than 2 voice requests at once");
     assert.match(tts[0].url, /XrExE9yKIg1WjnnlVkGX/, "female narrator");
     assert.equal(tts[0].body.model_id, "eleven_v3");
     assert.deepEqual(store.db.answers[0].comic_script.video_notes, []);

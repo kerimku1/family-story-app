@@ -123,6 +123,7 @@ export function sampleStory() {
 
 // One second of real MP3 audio, so the video maker can measure and mix it.
 let speech = null;
+let ttsRunning = 0;
 function fakeSpeech() {
   if (!speech) {
     const bin = require("ffmpeg-static");
@@ -144,7 +145,15 @@ export function installFakeApis(log = []) {
       const body = JSON.parse(init.body);
       log.push({ service: "tts", url, init, body });
       if (globalThis.__TTS_FAIL__) return new Response('{"detail":"missing_permissions"}', { status: 401 });
-      return new Response(fakeSpeech(), { headers: { "content-type": "audio/mpeg" } });
+      if (ttsRunning >= 2) {
+        log.push({ service: "tts-refused" });
+        return new Response('{"detail":{"type":"rate_limit_error","code":"concurrent_limit_exceeded","message":"Too many concurrent requests."}}', { status: 429 });
+      }
+      ttsRunning++;
+      try {
+        await new Promise((r) => setTimeout(r, 30));
+        return new Response(fakeSpeech(), { headers: { "content-type": "audio/mpeg" } });
+      } finally { ttsRunning--; }
     }
     if (url.startsWith("https://api.elevenlabs.io/")) {
       log.push({ service: "elevenlabs", url, init });
