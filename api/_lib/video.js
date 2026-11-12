@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { env } from "./store.js";
 import { ffmpegPath } from "./clips.js";
 import { generateComic } from "./comic.js";
+import { startInOwnCall } from "./selfcall.js";
 
 const W = 1280;
 const H = 720;
@@ -288,24 +289,6 @@ export async function comicThenVideo(store, answerId, drawOptions = {}) {
   const total = (after.comic_script.panels || []).length;
   const hasVideo = media.some((m) => m.kind === "video" && m.panel_index === APP_VIDEO && m.status !== "failed");
   if (panels.length < total || hasVideo) return;
-  if (!(await startVideoElsewhere(answerId))) await makeVideo(store, answerId, { fetchImpl: drawOptions.fetchImpl });
+  if (!(await startInOwnCall({ action: "video-make", answerId }))) await makeVideo(store, answerId, { fetchImpl: drawOptions.fetchImpl });
 }
 
-// On Vercel, ask our own studio endpoint to make the video, so it gets a fresh time limit.
-async function startVideoElsewhere(answerId) {
-  const base = env("PUBLIC_BASE_URL") || (env("VERCEL_PROJECT_PRODUCTION_URL") ? "https://" + env("VERCEL_PROJECT_PRODUCTION_URL") : "");
-  const password = String(process.env.STUDIO_PASSWORD || "").trim();
-  if (!process.env.VERCEL || !base || !password) return false;
-  try {
-    const res = await fetch(base.replace(/\/+$/, "") + "/api/studio", {
-      method: "POST",
-      headers: { authorization: "Bearer " + password, "content-type": "application/json" },
-      body: JSON.stringify({ action: "video-make", answerId }),
-      signal: AbortSignal.timeout(20000)
-    });
-    return res.ok || res.status === 409;
-  } catch (err) {
-    console.error("could not start the video job", err.message);
-    return false;
-  }
-}

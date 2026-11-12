@@ -85,3 +85,7 @@
 .narrator .chip { font-size: 15px; padding: 8px 14px; }
 .teller-link { display: flex; flex-direction: column; gap: 8px; }
 .teller-link .link-box { font-size: 14px; }
+.studio-comic { display: flex; flex-direction: column; gap: 14px; }
+.studio .roles-box.warn { border-color: var(--accent); background: var(--accent-soft); }
+.studio .role-row { display: flex; flex-direction: column; gap: 4px; }
+.studio .cv-below .btn { min-height: 40px; }

@@ -11,7 +11,7 @@ import { ffmpegPath, run } from "./clips.js";
 
 const DEFAULT_MODEL = "gemini-3.1-flash-image-preview";
 const MAX_PHOTOS = 3;
-const PARALLEL = 3;            // panels drawn at the same time
+const PARALLEL = 4;            // panels drawn at the same time
 export const STALE_MS = 6 * 60 * 1000; // a "drawing" job older than this is treated as stuck
 // The server stops a job after 300 s, so drawing gives up in time to save what it has and say so.
 const BUDGET_MS = 230 * 1000;
@@ -38,18 +38,25 @@ function storytellerCharacter(script) {
   return chars.find((c) => c.is_storyteller) || chars[0] || null;
 }
 
+const GENDER_WORD = { female: "woman", male: "man" };
+
+function characterLine(c) {
+  const who = [GENDER_WORD[c.gender], c.role].filter(Boolean).join(", ");
+  return `- ${c.name}${who ? ` (${who})` : ""}: ${c.look}`;
+}
+
 function styleLines(script, tellerName) {
   const lines = [
-    `This is a warm family comic about the life of ${tellerName || "a loved one"}, made for their family.`,
-    "Style: warm hand-drawn illustration, clean ink outlines, soft natural colours, gentle light, expressive faces. The same style in every image.",
+    `This is a family comic about the real life of ${tellerName || "a loved one"}, made for their family.`,
+    "Style: modern graphic-novel illustration, clean confident ink lines, rich warm colours, cinematic lighting, expressive faces and body language. The same style in every image.",
     "Era, place and mood: " + (script.style_notes || "not specified") + ".",
-    "Characters:"
+    "Characters (draw each one with exactly this gender and look, the same in every image):"
   ];
-  for (const c of script.characters || []) lines.push(`- ${c.name}: ${c.look}`);
+  for (const c of script.characters || []) lines.push(characterLine(c));
   return lines;
 }
 
-const NO_TEXT = "IMPORTANT: no text of any kind in the image — no captions, no speech bubbles, no letters, no words, no signs, no numbers, no watermark.";
+const NO_TEXT = "IMPORTANT: no text of any kind in the image — no captions, no speech bubbles, no letters, no words, no signs, no numbers, no watermark. The app adds the text later.";
 
 function photoNote(script, photoCount, firstIndex) {
   if (!photoCount) return [];
@@ -62,25 +69,41 @@ export function sheetPrompt(script, tellerName, photoCount) {
   return [
     ...styleLines(script, tellerName),
     "",
-    "Draw a character reference sheet: every character above, full body, front view and three-quarter view, side by side on a plain light background.",
+    "Draw a character reference sheet: every character above, full body, front view and three-quarter view, side by side on a plain light background. Make each character's gender, age, face, hair and clothes unmistakable.",
     ...photoNote(script, photoCount, 1),
     NO_TEXT
   ].join("\n");
 }
 
+// "wide" panels are 16:9, "square" ones 1:1. Older scripts have no shape: 4:3.
+export function panelAspect(panel) {
+  return panel && panel.shape === "wide" ? "16:9" : panel && panel.shape === "square" ? "1:1" : "4:3";
+}
+
 export function panelPrompt(script, index, tellerName, { hasSheet, photoCount }) {
   const panels = script.panels || [];
   const p = panels[index] || {};
+  const byName = new Map((script.characters || []).map((c) => [c.name, c]));
+  const place = (name, side) => {
+    if (!name) return null;
+    const c = byName.get(name);
+    return `${side}: ${name}${c && GENDER_WORD[c.gender] ? ` (the ${GENDER_WORD[c.gender]})` : ""}`;
+  };
+  const positions = [place(p.left, "On the LEFT"), place(p.right, "On the RIGHT")].filter(Boolean);
+  const hasText = Boolean((p.dialogue && p.dialogue.length) || p.caption);
   const refs = [];
-  if (hasSheet) refs.push("Image 1 is the character sheet for this comic: draw every character exactly as on it (face, hair, clothes, proportions).");
+  if (hasSheet) refs.push("Image 1 is the character sheet for this comic: draw every character exactly as on it (gender, face, hair, clothes, proportions).");
   refs.push(...photoNote(script, photoCount, hasSheet ? 2 : 1));
   return [
     ...styleLines(script, tellerName),
     "",
-    `Draw ONE comic panel: panel ${index + 1} of ${panels.length}.`,
+    `Draw ONE comic panel: panel ${index + 1} of ${panels.length}${p.page ? ` (page ${p.page})` : ""}, aspect ratio ${panelAspect(p)}.`,
     "Scene: " + (p.setting || "") + ".",
     "What we see: " + (p.action || "") + ".",
-    "One clear moment, faces visible, cinematic framing.",
+    ...(positions.length ? ["Placement: " + positions.join("; ") + "."] : []),
+    hasText
+      ? "Composition: keep the TOP QUARTER of the frame as calm, simple background (sky, wall, ceiling, soft light) with no heads or important details in it — speech bubbles will be placed there later."
+      : "Composition: one clear moment, faces visible, cinematic framing.",
     ...refs,
     NO_TEXT
   ].join("\n");
@@ -278,7 +301,7 @@ export async function generateComic(store, answerId, { panelIndexes = null, newS
     await pool(wanted, PARALLEL, async (index) => {
       try {
         const prompt = panelPrompt(script, index, teller.name, { hasSheet: true, photoCount: photos.length });
-        const image = await drawImage(prompt, [sheet, ...photos], { aspectRatio: "4:3", fetchImpl, deadline });
+        const image = await drawImage(prompt, [sheet, ...photos], { aspectRatio: panelAspect(script.panels[index]), fetchImpl, deadline });
         const { mine } = await check();
         if (!mine) return;
         const status = live || (autoPublishOn() && !panelIndexes) ? "published" : "draft";

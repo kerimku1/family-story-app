@@ -108,16 +108,26 @@ export function sampleStory() {
       traits: [],
       appearance: []
     },
-    comic: {
-      style_notes: "Rural Kazakhstan village by a river, warm Sunday morning",
-      storyteller_voice: "female",
-      characters: [{ name: "Narrator as a girl", look: "young girl, not described further", is_storyteller: true }, { name: "Mama", look: "not described", is_storyteller: false }],
-      panels: [
-        { setting: "Village by a river", action: "A white house with blue shutters", caption: "Дом у реки", quote: "у нас был белый дом с синими ставнями", quote_answer: 1 },
-        { setting: "Kitchen, Sunday", action: "Mother frying baursaks", caption: "Воскресенье", quote: "Мама пекла баурсаки каждое воскресенье", quote_answer: 1 }
-      ]
-    },
     follow_up_questions: ["Как называлась река?"]
+  };
+}
+
+export function sampleComic() {
+  return {
+    style_notes: "Rural Kazakhstan village by a river, warm Sunday morning",
+    storyteller_voice: "female",
+    characters: [
+      { name: "Narrator as a girl", gender: "female", role: "the storyteller, 8", look: "young girl with two braids, red dress", is_storyteller: true },
+      { name: "Mama", gender: "female", role: "her mother", look: "woman in her thirties, white headscarf", is_storyteller: false }
+    ],
+    panels: [
+      { page: 1, shape: "wide", setting: "Village by a river", action: "A white house with blue shutters", left: "Narrator as a girl", right: "",
+        caption: "Дом у реки", dialogue: [{ speaker: "Narrator as a girl", side: "left", text: "Это наш дом!" }],
+        quote: "у нас был белый дом с синими ставнями", quote_answer: 1 },
+      { page: 2, shape: "square", setting: "Kitchen, Sunday", action: "Mother frying baursaks", left: "Mama", right: "Narrator as a girl",
+        caption: "Воскресенье", dialogue: [{ speaker: "Mama", side: "left", text: "Бери, пока горячие!" }, { speaker: "Narrator as a girl", side: "right", text: "Ещё один!" }],
+        quote: "Мама пекла баурсаки каждое воскресенье", quote_answer: 1 }
+    ]
   };
 }
 
@@ -183,7 +193,8 @@ export function installFakeApis(log = []) {
       // Two kinds of request: the ~5 lead-up questions, or the story itself.
       const steps = Boolean(body.output_config?.format?.schema?.properties?.questions);
       if (steps && globalThis.__CLAUDE_STEPS_FAIL__) return Response.json({ error: { message: "overloaded" } }, { status: 529 });
-      const reply = steps ? { questions: SAMPLE_STEPS } : sampleStory();
+      const schema = body.output_config?.format?.schema?.properties || {};
+      const reply = steps ? { questions: SAMPLE_STEPS } : schema.panels ? sampleComic() : sampleStory();
       return Response.json({ stop_reason: "end_turn", content: [{ type: "text", text: JSON.stringify(reply) }] });
     }
     return realFetch(input, init);

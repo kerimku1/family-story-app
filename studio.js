@@ -126,6 +126,7 @@
         h("p", { class: "meta", text: [REL[t.relationship], "asked by " + t.from, "started " + day(t.createdAt)].filter(Boolean).join(" · ") }),
         h("div", { class: "toolbar" },
           h("a", { class: "btn btn-secondary", href: familyUrl, target: "_blank", rel: "noopener" }, "Open family page ↗")),
+        rolesBox(t),
         tellerLinkBox(t)),
       latest ? storyCard(t, latest, true) : h("p", { class: "lead", text: "No questions yet." }),
       older.length ? h("section", { class: "older" },
@@ -144,6 +145,23 @@
         h("div", { class: "box" },
           h("p", { text: "Delete " + t.name + " and everything about them: all stories, recordings, comics, photos and both links. This can't be undone." }),
           h("button", { class: "btn btn-quiet danger", type: "button", disabled: busy === t.id + ":delete", onclick: function () { deletePerson(t); } }, "Delete " + t.name))));
+  }
+
+  // Who is who, so the comic draws both people right (e.g. a woman telling her boyfriend).
+  function rolesBox(t) {
+    const about = t.about || {};
+    const row = function (label, key) {
+      return h("div", { class: "role-row" }, h("span", { class: "meta", text: label }),
+        h("div", { class: "chips" }, [["female", "Woman"], ["male", "Man"]].map(function (o) {
+          return h("button", { type: "button", class: "chip", "aria-pressed": String(about[key] === o[0]), onclick: function () { setRoles(t, key, o[0]); } }, o[1]);
+        })));
+    };
+    const missing = !about.gender || !about.askerGender;
+    return h("div", { class: "box roles-box" + (missing ? " warn" : "") },
+      h("b", { text: "Who is who" }),
+      missing ? h("p", { class: "meta", text: "Set this so the comic draws both people right. Then tap “Make a new comic”." }) : null,
+      row(t.name + " (tells the story)", "gender"),
+      row(t.from + " (asked)", "askerGender"));
   }
 
   // The storyteller's own private link (where they answer and tap "OK to use").
@@ -307,16 +325,25 @@
 
   function panelGrid(t, a, script, panels, st) {
     const drawing = a.comicStatus === "drawing";
-    return h("div", { class: "panel-grid" }, (script.panels || []).map(function (p, i) {
+    const items = (script.panels || []).map(function (p, i) {
       const image = panels.filter(function (m) { return m.panelIndex === i && m.url; }).pop();
-      return h("figure", { class: "sp" },
-        image ? h("img", { src: image.url, alt: "Picture " + (i + 1) }) : h("div", { class: "sp-empty", text: "No picture yet" }),
-        h("figcaption", null,
-          h("span", { class: "sp-cap", text: (i + 1) + ". " + p.caption }),
-          h("div", { class: "sp-actions" },
-            data.aiDrawing ? h("button", { class: "btn btn-secondary", type: "button", disabled: drawing, onclick: function () { drawComic(a, i); } }, image ? "Redraw" : "Draw") : null,
-            fileButton("Use my own", "image/png,image/jpeg,image/webp", busy === a.id + ":panel:" + i, function (f) { uploadPanel(t, a, i, f); }))));
-    }));
+      return Object.assign({}, p, { url: image ? image.url : null, _has: Boolean(image) });
+    });
+    const oldFormat = !(script.panels || []).some(function (p) { return p.page || (p.dialogue && p.dialogue.length); });
+    return h("div", { class: "studio-comic" },
+      h("div", { class: "box remake" },
+        h("b", { text: oldFormat ? "This comic is in the old format (pictures only)." : "Not happy with the comic?" }),
+        h("p", { class: "meta", text: "Make a new comic: a new script with pages, dialogue and narration, then every picture drawn again. The story text stays as " + t.name + " approved it. Takes 3–5 minutes." }),
+        h("button", { class: "btn " + (oldFormat ? "btn-primary" : "btn-secondary"), type: "button", disabled: drawing || busy === a.id + ":remake", onclick: function () { remakeComic(a); } }, busy === a.id + ":remake" ? "Starting…" : "Make a new comic")),
+      window.ComicView.pages(h, items, function (p, i, solo) {
+        return window.ComicView.panel(h, p, {
+          solo: solo, emptyText: "No picture yet",
+          below: h("div", { class: "cv-below" },
+            h("div", { class: "sp-actions" },
+              data.aiDrawing ? h("button", { class: "btn btn-secondary", type: "button", disabled: drawing, onclick: function () { drawComic(a, i); } }, p._has ? "Redraw" : "Draw") : null,
+              fileButton("Use my own", "image/png,image/jpeg,image/webp", busy === a.id + ":panel:" + i, function (f) { uploadPanel(t, a, i, f); })))
+        });
+      }, function (n) { return "Page " + n; }));
   }
 
   // A plain button that opens the file picker and uploads as soon as a file is chosen.
@@ -483,6 +510,23 @@
     busy = a.id + ":publish"; render();
     try { await api("POST", { action: "comic-publish", answerId: a.id, publish: publish, withVideo: withVideo !== false }); } catch (e) { alert(e.message); }
     busy = ""; load();
+  }
+
+  async function remakeComic(a) {
+    if (!confirm("Make a new comic for this story? The current pictures will be replaced.")) return;
+    busy = a.id + ":remake"; render();
+    try { await api("POST", { action: "comic-rewrite", answerId: a.id }); }
+    catch (e) { alert(e.message); }
+    busy = ""; setTimeout(load, 1500);
+  }
+
+  async function setRoles(t, key, value) {
+    const about = Object.assign({ gender: null, askerGender: null }, t.about || {});
+    about[key] = value;
+    t.about = about;
+    render();
+    try { await api("POST", { action: "set-roles", storytellerId: t.id, gender: about.gender, askerGender: about.askerGender }); }
+    catch (e) { alert(e.message); load(); }
   }
 
   async function drawMissing(a) {

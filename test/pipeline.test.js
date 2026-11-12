@@ -116,8 +116,12 @@ test("full flow: choose a question → answer the lead-up questions → one stor
     const answer = store.db.answers[0];
     assert.equal(answer.status, "ready", answer.error || "");
     assert.equal(answer.title, "Белый дом у реки");
-    const storyCall = apiLog.filter((c) => c.service === "anthropic").at(-1);
-    assert.ok(storyCall.body.output_config.format.schema.properties.comic);
+    const calls = apiLog.filter((c) => c.service === "anthropic");
+    const storyCall = calls.find((c) => c.body.output_config.format.schema.properties.story);
+    const comicCall = calls.find((c) => c.body.output_config.format.schema.properties.panels);
+    assert.ok(storyCall && comicCall, "the story and the comic are written in two steps");
+    assert.match(comicCall.body.messages[0].content, /never change, contradict or exaggerate/i);
+    assert.match(comicCall.body.messages[0].content, /Белый дом у реки|синими ставнями/, "the comic is written from the approved story");
     const prompt = storyCall.body.messages[0].content;
     assert.match(prompt, /Кем вы мечтали стать в детстве/);
     assert.match(prompt, /Answer 1 \(spoken/);
@@ -199,7 +203,7 @@ test("typed story with your own question: no transcription, written in Kazakh fr
     assert.equal(a.status, "ready", a.error || "");
     assert.equal(a.transcript, "Мен ауылда тудым.\nҮйіміз ақ еді.");
     assert.equal(apiLog.filter((c) => c.service === "elevenlabs").length, 0, "typed answers must not be transcribed");
-    const prompt = apiLog.filter((c) => c.service === "anthropic").at(-1).body.messages[0].content;
+    const prompt = apiLog.filter((c) => c.service === "anthropic" && c.body.output_config.format.schema.properties.story).at(-1).body.messages[0].content;
     assert.match(prompt, /Kazakh/);
     assert.match(prompt, /Сіз неден қорқатын едіңіз/);
     assert.match(prompt, /Үйіміз ақ еді/);
@@ -400,8 +404,13 @@ test("automatic comics: approval draws a sheet and panels with the photos, redra
       assert.match(text, /Image 1 is the character sheet/);
       assert.match(text, /"Narrator as a girl"'s face/);
       assert.equal(c.body.contents[0].parts.length, 3, "panel gets sheet + photo");
-      assert.equal(c.body.generationConfig.imageConfig.aspectRatio, "4:3");
+      assert.match(text, /\(woman, /, "characters are drawn with their gender");
+      assert.match(text, /TOP QUARTER/, "room left for speech bubbles");
     }
+    const ratio = (n) => panelCalls.find((c) => c.body.contents[0].parts[0].text.includes(`panel ${n} of 2`)).body.generationConfig.imageConfig.aspectRatio;
+    assert.equal(ratio(1), "16:9", "wide panel");
+    assert.equal(ratio(2), "1:1", "square panel");
+    assert.match(panelCalls.find((c) => c.body.contents[0].parts[0].text.includes("panel 2 of 2")).body.contents[0].parts[0].text, /On the LEFT: Mama \(the woman\); On the RIGHT: Narrator as a girl/);
     const panels = () => store.db.media.filter((m) => m.answer_id === id && m.kind === "panel");
     assert.deepEqual(panels().map((m) => m.panel_index).sort(), [0, 1]);
     assert.ok(panels().every((m) => m.status === "draft"), "drafts until the studio publishes");
@@ -673,6 +682,61 @@ test("Gemini 429: no quota stops at once with a clear reason; a rate limit is re
     assert.equal(store.db.answers[0].comic_status, "ready", store.db.answers[0].comic_error || "");
   } finally {
     globalThis.__GEMINI_429__ = null;
+    delete process.env.GEMINI_API_KEY;
+    delete process.env.AUTO_VIDEO;
+    server.close();
+  }
+});
+
+test("who is who: saved from the link, used in every prompt, editable in the studio; new comic keeps the story", async () => {
+  const { server, store, apiLog, url } = await startTestServer(8788);
+  const { post, waitFor, tokens, latestStory } = client(url);
+  const auth = { authorization: "Bearer " + process.env.STUDIO_PASSWORD };
+  process.env.GEMINI_API_KEY = "test-gemini";
+  process.env.AUTO_VIDEO = "off";
+  try {
+    const created = await post("/api/create", { from: "Mo", name: "Aru", lang: "en", relationship: "partner", gender: "female", askerGender: "male", mainKey: "r01", mainQuestion: "What did you think of me when we first met?" });
+    const { t } = tokens(created.body);
+    const teller = store.db.storytellers[0];
+    assert.deepEqual(teller.life_card.about, { gender: "female", askerGender: "male" });
+    const stepsPrompt = apiLog.find((c) => c.service === "anthropic").body.messages[0].content;
+    assert.match(stepsPrompt, /Aru is a woman/);
+
+    const id = (await latestStory(t)).id;
+    await post("/api/teller", { t, action: "text-answer", answerId: id, partIndex: 0, text: "You were sitting by the only free plug." });
+    await post("/api/teller", { t, action: "finish", answerId: id });
+    await waitFor(() => store.db.answers[0].status === "ready");
+    const prompts = apiLog.filter((c) => c.service === "anthropic").map((c) => c.body.messages[0].content);
+    const comicPrompt = prompts.find((p) => /Turn a real family story into a comic/.test(p));
+    assert.match(comicPrompt, /Aru, a woman, the asker's girlfriend or wife/);
+    assert.match(comicPrompt, /Mo, a man, the storyteller's boyfriend or husband/);
+    assert.match(comicPrompt, /that is Mo — draw them as the boyfriend or husband/);
+    assert.equal(store.db.answers[0].comic_script.panels[1].dialogue.length, 2, "panels carry dialogue");
+    assert.ok(store.db.storytellers[0].life_card.about, "who is who survives the life-card update");
+
+    // The studio corrects who is who and makes a new comic; the approved story text stays the same.
+    assert.equal((await post("/api/studio", { action: "set-roles", storytellerId: teller.id, gender: "female", askerGender: "female" }, auth)).status, 200);
+    assert.equal(store.db.storytellers[0].life_card.about.askerGender, "female");
+    assert.equal((await post("/api/studio", { action: "comic-rewrite", answerId: id }, auth)).status, 400, "only after approval");
+    await post("/api/teller", { t, action: "approve", answerId: id, approval: "approved" });
+    await waitFor(() => store.db.answers[0].comic_status === "ready");
+    const story = store.db.answers[0].story;
+    const before = apiLog.filter((c) => c.service === "anthropic").length;
+    assert.equal((await post("/api/studio", { action: "comic-rewrite", answerId: id }, auth)).status, 200);
+    await waitFor(() => apiLog.filter((c) => c.service === "anthropic").length > before && store.db.answers[0].comic_status === "ready", 400);
+    const newCalls = apiLog.filter((c) => c.service === "anthropic").slice(before);
+    assert.equal(newCalls.length, 1, "only the comic is rewritten");
+    assert.match(newCalls[0].body.messages[0].content, /Mo, a woman/);
+    assert.equal(store.db.answers[0].story, story);
+    assert.equal(store.db.media.filter((m) => m.answer_id === id && m.kind === "panel").length, 2);
+
+    // The family gets dialogue and layout, still never the story text.
+    await post("/api/studio", { action: "comic-publish", answerId: id, publish: true }, auth);
+    const fam = await (await fetch(`${url}/api/family?f=${tokens(created.body).f}`)).json();
+    assert.equal(fam.comics[0].panels[1].shape, "square");
+    assert.equal(fam.comics[0].panels[1].dialogue[0].text, "Бери, пока горячие!");
+    assert.equal(JSON.stringify(fam).includes("синими ставнями. Каждое"), false);
+  } finally {
     delete process.env.GEMINI_API_KEY;
     delete process.env.AUTO_VIDEO;
     server.close();

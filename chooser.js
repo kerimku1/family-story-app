@@ -33,6 +33,22 @@
         }, h("span", { class: "icon", svg: ICONS[r] }), t.rel[r]);
       })));
     }
+    if (sel.relationship && !opts.fixedRelationship && t.roleThey) {
+      // Who is who: "a son asks his mother". The comic draws both people from this.
+      const roleRow = function (label, key, names) {
+        return h("div", { class: "role-row" },
+          h("span", { class: "small", text: label }),
+          h("div", { class: "chips", role: "radiogroup", "aria-label": label }, ["female", "male"].map(function (g) {
+            return h("button", {
+              type: "button", class: "chip", role: "radio", "aria-checked": String(sel[key] === g), "aria-pressed": String(sel[key] === g),
+              onclick: function () { const patch = {}; patch[key] = g; onChange(patch); }
+            }, names[g]);
+          })));
+      };
+      parts.push(h("div", { class: "roles" },
+        roleRow(t.whoThey, "gender", t.roleThey[sel.relationship]),
+        roleRow(t.whoYou, "askerGender", t.roleYou[sel.relationship])));
+    }
     if (sel.relationship) {
       // Questions already asked are left out (opts.hideKeys), unless one is the current choice.
       const hide = new Set(opts.hideKeys || []);

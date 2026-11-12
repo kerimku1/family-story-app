@@ -57,7 +57,7 @@
     timerId: 0,
     notice: null,
     form: { from: "", name: "", qlang: "" },
-    sel: { relationship: null, key: null, custom: "", showAll: false },
+    sel: { relationship: null, key: null, custom: "", showAll: false, gender: null, askerGender: null },
     created: null,
     creating: false,
     copied: ""
@@ -198,6 +198,7 @@
     if (!from) { fromInput.focus(); return; }
     if (!name) { nameInput.focus(); return; }
     if (!state.sel.relationship) { state.notice = { kind: "bad", text: t.needRelationship }; return render(); }
+    if (!state.sel.gender || !state.sel.askerGender) { state.notice = { kind: "bad", text: t.needRoles }; return render(); }
     const mainQuestion = Chooser.mainText(state.sel, state.form.qlang);
     if (!mainQuestion) { state.notice = { kind: "bad", text: t.needQuestion }; return render(); }
     state.creating = true;
@@ -206,6 +207,7 @@
     try {
       const data = await api("POST", "/api/create", {
         from: from, name: name, lang: state.form.qlang, relationship: state.sel.relationship,
+        gender: state.sel.gender, askerGender: state.sel.askerGender,
         mainKey: state.sel.key, mainQuestion: mainQuestion
       });
       try { localStorage.setItem("teller-link:" + new URL(data.familyUrl).searchParams.get("f"), data.tellerUrl); } catch (e) { /* storage blocked */ }
@@ -245,7 +247,7 @@
         h("button", { class: "btn btn-quiet", type: "button", onclick: function () { copyText(c.familyUrl, "family"); } }, state.copied === "family" ? t.copied : t.copy)),
       h("button", { class: "btn btn-quiet", type: "button", onclick: function () {
         state.created = null;
-        state.sel = { relationship: null, key: null, custom: "", showAll: false };
+        state.sel = { relationship: null, key: null, custom: "", showAll: false, gender: null, askerGender: null };
         state.form.name = "";
         render();
         window.scrollTo(0, 0);

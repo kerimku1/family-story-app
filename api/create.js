@@ -1,9 +1,10 @@
 // A family member asks someone one main question.
-// POST { from, name, lang, relationship, mainKey, mainQuestion }
+// POST { from, name, lang, relationship, gender, askerGender, mainKey, mainQuestion }
 //   → { tellerUrl, familyUrl, mainQuestion, steps }
 import { getStore } from "./_lib/store.js";
 import { send, fail, readJson, newToken, cleanText, baseUrl, LANGS } from "./_lib/http.js";
 import { RELATIONSHIPS, cleanMain, createStory } from "./_lib/stories.js";
+import { GENDERS } from "./_lib/roles.js";
 
 export const config = { maxDuration: 60 };
 
@@ -20,6 +21,8 @@ export default async function handler(req, res) {
     if (!relationship) return fail(res, 400, "Choose who this person is to you");
     if (!main.mainQuestion) return fail(res, 400, "Choose a question");
 
+    const pick = (g) => (GENDERS.includes(g) ? g : null);
+    const about = { gender: pick(body.gender), askerGender: pick(body.askerGender) };
     const store = getStore();
     const teller = await store.createStoryteller({
       name,
@@ -28,7 +31,7 @@ export default async function handler(req, res) {
       relationship,
       teller_token: newToken(),
       family_token: newToken(),
-      life_card: {}
+      life_card: { about }
     });
     const story = await createStory(store, teller, main);
     const base = baseUrl(req);

@@ -12,11 +12,14 @@
 // POST { action: "media-delete", mediaId }
 // POST { action: "comic-draw", answerId, panelIndex? }          → draw the whole comic with AI, or redraw one panel
 //      kind "photo" in media-upload-url = a real photo of the storyteller, used only as a drawing reference
+// POST { action: "comic-rewrite", answerId }                   → write a new comic script (pages, dialogue) and draw it
+// POST { action: "set-roles", storytellerId, gender, askerGender } → who is who ("female" | "male")
 // POST { action: "story-delete", answerId }                    → delete one story and everything made from it
 // POST { action: "person-delete", storytellerId }              → delete a person, all their stories, photos and links
 import { getStore } from "./_lib/store.js";
 import { send, fail, readJson, isAdmin, cleanText, inBackground } from "./_lib/http.js";
-import { processAnswer, mergeLifeCard } from "./_lib/pipeline.js";
+import { processAnswer, mergeLifeCard, remakeComic } from "./_lib/pipeline.js";
+import { GENDERS, aboutOf } from "./_lib/roles.js";
 import { generateComic, STALE_MS } from "./_lib/comic.js";
 import { makeVideo, APP_VIDEO, comicThenVideo } from "./_lib/video.js";
 import { env } from "./_lib/store.js";
@@ -94,6 +97,7 @@ export default async function handler(req, res) {
             .filter((a) => a.approval === "approved" && a.details)
             .reduce((card, a) => mergeLifeCard(card, a.details), {}),
           relationship: t.relationship || null,
+          about: aboutOf(t),
           answers: answers.filter((a) => a.status !== "pending").map((a) => answerForStudio(a, parts)),
           media: mediaOut
         });
@@ -187,10 +191,10 @@ export default async function handler(req, res) {
       if (!answer.comic_script || !(answer.comic_script.panels || []).length) return fail(res, 400, "This story has no comic script yet");
       const one = body.panelIndex === undefined || body.panelIndex === null ? null : Number(body.panelIndex);
       if (one !== null && (!Number.isInteger(one) || one < 0 || one >= answer.comic_script.panels.length)) return fail(res, 400, "Bad panel");
-      if (answer.comic_status === "drawing" && Date.now() - Date.parse(answer.comic_started_at || 0) < STALE_MS) {
+      if (!body.force && answer.comic_status === "drawing" && Date.now() - Date.parse(answer.comic_started_at || 0) < STALE_MS) {
         return fail(res, 409, "Already drawing, please wait");
       }
-      let options = one === null ? { newSheet: true } : { panelIndexes: [one] };
+      let options = one === null ? { newSheet: true, force: Boolean(body.force) } : { panelIndexes: [one] };
       if (body.missing) {
         // Keep the pictures that are already drawn; draw the rest with the same character sheet.
         const media = await store.listMediaForAnswer(answer.id);
@@ -200,6 +204,26 @@ export default async function handler(req, res) {
         options = missing.length && have.size && hasSheet ? { panelIndexes: missing, force: true } : { newSheet: true, force: true };
       }
       await inBackground(comicThenVideo(store, answer.id, options));
+      return send(res, 200, { ok: true });
+    }
+
+    if (body.action === "comic-rewrite") {
+      const answer = await store.answerById(String(body.answerId || ""));
+      if (!answer) return fail(res, 404, "Answer not found");
+      if (answer.approval !== "approved" || answer.status !== "ready") return fail(res, 400, "The storyteller has not approved this story");
+      if (answer.comic_status === "drawing" && Date.now() - Date.parse(answer.comic_started_at || 0) < STALE_MS) {
+        return fail(res, 409, "Already drawing, please wait");
+      }
+      await inBackground(remakeComic(store, answer.id));
+      return send(res, 200, { ok: true });
+    }
+
+    if (body.action === "set-roles") {
+      const teller = await store.storytellerById(String(body.storytellerId || ""));
+      if (!teller) return fail(res, 404, "Storyteller not found");
+      const pick = (g) => (GENDERS.includes(g) ? g : null);
+      const about = { gender: pick(body.gender), askerGender: pick(body.askerGender) };
+      await store.updateStoryteller(teller.id, { life_card: { ...(teller.life_card || {}), about } });
       return send(res, 200, { ok: true });
     }
 

@@ -211,3 +211,53 @@ audio { width: 100%; }
 .asked-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
 .asked-list li { display: flex; flex-direction: column; gap: 2px; border-left: 3px solid var(--accent); padding-left: 12px; }
 .asked-main { font-weight: 600; font-size: 18px; }
+.roles { display: flex; flex-direction: column; gap: 12px; padding: 12px; border-radius: 12px; background: var(--bg); border: 1px solid var(--line); }
+.role-row { display: flex; flex-direction: column; gap: 6px; }
+
+/* ---------- Comic pages (comic-view.js) ---------- */
+.cv-page { display: flex; flex-direction: column; gap: 8px; container-type: inline-size; }
+.cv-page-label { font-size: 13px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.cv-grid { display: grid; grid-template-columns: 1fr; gap: 10px; }
+@container (min-width: 420px) {
+  .cv-grid { grid-template-columns: 1fr 1fr; }
+  .cv-panel.wide, .cv-panel.solo { grid-column: 1 / -1; }
+}
+.cv-panel { margin: 0; border: 3px solid #1f1a17; border-radius: 4px; overflow: hidden; background: #fffdf7; display: flex; flex-direction: column; }
+.cv-caption {
+  background: #fff1b8; color: #1f1a17; border-bottom: 3px solid #1f1a17; padding: 8px 12px;
+  font-size: 15px; line-height: 1.35; font-style: italic; font-weight: 600;
+}
+.cv-art { position: relative; container-type: inline-size; background: #e9e2d6; }
+.cv-art img { display: block; width: 100%; height: auto; }
+.cv-empty { aspect-ratio: 16 / 9; display: grid; place-items: center; color: #6e6259; font-size: 15px; }
+.cv-panel.square .cv-empty { aspect-ratio: 1; }
+.cv-art.legacy .cv-empty { aspect-ratio: 4 / 3; }
+.cv-bubbles {
+  position: absolute; top: 3%; left: 3%; right: 3%;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 2cqw 4cqw; align-items: start; pointer-events: none;
+}
+.cv-bubble {
+  position: relative; background: #fff; color: #111; border: 2px solid #111; border-radius: 1.4em;
+  padding: 0.45em 0.8em; font-weight: 700; line-height: 1.25; text-align: center;
+  font-size: clamp(13px, 4.2cqw, 22px); box-shadow: 0 2px 0 rgba(0, 0, 0, 0.25);
+  max-width: 100%; overflow-wrap: anywhere;
+}
+.cv-bubble.left { grid-column: 1; justify-self: start; }
+.cv-bubble.right { grid-column: 2; justify-self: end; }
+/* A single bubble may use most of the width */
+.cv-bubble:only-child { grid-column: 1 / -1; max-width: 72%; }
+/* Tail pointing down toward the speaker */
+.cv-bubble::after, .cv-bubble::before { content: ""; position: absolute; top: 100%; border-style: solid; }
+.cv-bubble::before { border-width: 0.9em 0.55em 0 0.55em; border-color: #111 transparent transparent transparent; }
+.cv-bubble::after { border-width: 0.68em 0.4em 0 0.4em; border-color: #fff transparent transparent transparent; margin-top: -1px; }
+.cv-bubble.left::before { left: 1.4em; } .cv-bubble.left::after { left: calc(1.4em + 0.15em); }
+.cv-bubble.right::before { right: 1.4em; } .cv-bubble.right::after { right: calc(1.4em + 0.15em); }
+.cv-voice {
+  position: absolute; right: 2.5%; bottom: 3%; display: inline-flex; align-items: center; gap: 6px;
+  font: inherit; font-size: 14px; font-weight: 700; border: 2px solid #111; border-radius: 999px;
+  background: #fff; color: #111; padding: 6px 12px; min-height: 40px; cursor: pointer;
+}
+.cv-voice .icon svg { width: 18px; height: 18px; }
+.cv-panel.playing { box-shadow: 0 0 0 4px var(--accent); }
+.cv-panel.playing .cv-voice { background: var(--accent); border-color: var(--accent); color: #fff; }
+.cv-below { padding: 10px; display: flex; flex-direction: column; gap: 8px; border-top: 3px solid #1f1a17; background: var(--card); }

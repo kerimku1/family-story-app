@@ -2,6 +2,7 @@
 import { writeSteps } from "./ai.js";
 import { cleanText } from "./http.js";
 import { clipPaths } from "./clips.js";
+import { aboutOf } from "./roles.js";
 
 export const RELATIONSHIPS = ["parent", "child", "partner", "friend"];
 
@@ -17,7 +18,8 @@ export async function createStory(store, teller, { mainQuestion, mainKey }, { fe
     name: teller.name,
     from: teller.from_name,
     lang: teller.lang,
-    relationship: teller.relationship
+    relationship: teller.relationship,
+    about: aboutOf(teller)
   }, { fetchImpl });
   const existing = await store.listAnswers(teller.id);
   return store.createAnswer({

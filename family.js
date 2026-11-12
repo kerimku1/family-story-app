@@ -147,19 +147,18 @@
           class: "btn btn-primary listen-all", type: "button", "data-listen": String(ci), "aria-pressed": "false",
           onclick: function () { if (playing && playing.all && playing.comic === ci) stop(); else playPanel(ci, 0, true); }
         }, icon(ICON_PLAY), t.listenAll) : null),
-      h("div", { class: "panels" }, c.panels.map(function (p, pi) {
-        return h("figure", { class: "panel-frame", id: "panel-" + ci + "-" + pi },
-          h("img", { src: p.url, alt: p.caption || "", loading: pi < 2 ? "eager" : "lazy" }),
-          h("figcaption", { class: "caption-box" },
-            h("span", { class: "caption-text", text: p.caption }),
-            p.clipUrl ? h("button", {
-              class: "voice-btn", type: "button", "aria-label": t.playPanel + ": " + p.caption,
-              onclick: function () {
-                if (playing && !playing.all && playing.comic === ci && playing.panel === pi) stop();
-                else playPanel(ci, pi, false);
-              }
-            }, icon(ICON_VOICE), t.playPanel) : null));
-      })));
+      h("div", { class: "panels" }, window.ComicView.pages(h, c.panels, function (p, pi, solo) {
+        return window.ComicView.panel(h, p, {
+          id: "panel-" + ci + "-" + pi, solo: solo, eager: pi < 2,
+          overlay: p.clipUrl ? h("button", {
+            class: "cv-voice", type: "button", "aria-label": t.playPanel + (p.caption ? ": " + p.caption : ""),
+            onclick: function () {
+              if (playing && !playing.all && playing.comic === ci && playing.panel === pi) stop();
+              else playPanel(ci, pi, false);
+            }
+          }, icon(ICON_VOICE), t.playPanel) : null
+        });
+      }, t.pageLabel)));
   }
 
   // ---------- The asker's questions and "ask another" ----------

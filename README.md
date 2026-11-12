@@ -123,6 +123,14 @@ Open **More options**, tap **Copy prompt 1** (2, 3…), make the picture in Gemi
 
 To clean up test data, open the person in the studio → **More for …** → **Delete …** (or **More options → Delete story** for one story).
 
+### The comic
+
+Each approved story becomes a short graphic-novel episode: 3–4 pages, 10–14 panels, with narration boxes and speech bubbles. Claude writes the comic script from the storyteller's own answers and the story they approved. It may add colour (setting, weather, gestures, fitting dialogue) but never changes their facts. Gemini draws the pictures without any text; the app draws the narration and bubbles itself, so the spelling is always right.
+
+**Who is who.** When creating a link, the asker chooses who the person is (mother/father, son/daughter, girlfriend·wife/boyfriend·husband, friend) and who they are, so both are drawn right and the story knows who "you" is. For people created earlier, set it in the studio under **Who is who**, then tap **Make a new comic**.
+
+Cost: about $0.07 per picture with Gemini, so roughly $0.80–1.00 per comic.
+
 ### Animated video (automatic)
 
 Right after the comic is drawn, the app makes a short video from it: each picture slowly zooms or pans, the caption is drawn by the app (so it's always spelled right), and there is a voice-over. Where the storyteller allowed their voice, it's their **real voice** for that picture. Everywhere else a calm narrator (ElevenLabs text-to-speech, woman or man) reads their words. It takes 1–2 minutes and costs a little ElevenLabs credit.

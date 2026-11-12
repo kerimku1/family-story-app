@@ -1,9 +1,11 @@
 // What happens after a story's parts are in:
 // each recording → transcript with word timings; all parts → one story + details + comic script → life card.
-import { transcribe, writeStory } from "./ai.js";
+import { transcribe, writeStory, writeComic } from "./ai.js";
+import { aboutOf } from "./roles.js";
 import { syncClips, clipPaths } from "./clips.js";
 import { autoComicsOn } from "./comic.js";
 import { comicThenVideo } from "./video.js";
+import { startInOwnCall } from "./selfcall.js";
 
 const CARD_KEYS = ["people", "places", "times", "objects", "phrases", "traits", "appearance"];
 
@@ -21,6 +23,7 @@ export function mergeLifeCard(card, details) {
     }
     out[key] = merged;
   }
+  if (card && card.about) out.about = card.about; // who's who, set by the asker or the studio
   return out;
 }
 
@@ -86,6 +89,58 @@ export async function transcribePart(store, partId, { fetchImpl = fetch } = {}) 
   }
 }
 
+// The comic script for a written story, with the moments where each panel's quote was spoken
+// (first in the answer the writer named, then in any other), so real-voice clips can be cut.
+async function comicScriptFor(teller, answer, parts, written, { fetchImpl }) {
+  const script = await writeComic({
+    name: teller.name,
+    from: teller.from_name,
+    lang: teller.lang,
+    relationship: teller.relationship,
+    about: aboutOf(teller),
+    question: answer.question_text,
+    parts: parts.map((p) => ({ question: p.question_text, text: p.transcript, spoken: Boolean(p.audio_path) })),
+    story: written.story,
+    title: written.title
+  }, { fetchImpl });
+  const panels = (script.panels || []).map((p) => {
+    if (!String(p.quote || "").trim()) return { ...p, voice_clip: null };
+    const named = parts[Number(p.quote_answer) - 1];
+    const order = named ? [named, ...parts.filter((x) => x !== named)] : parts;
+    for (const part of order) {
+      if (!part.audio_path) continue;
+      const clip = findClip(part.words, p.quote);
+      if (clip) return { ...p, voice_clip: { ...clip, part_id: part.id } };
+    }
+    return { ...p, voice_clip: null };
+  });
+  return { ...script, panels };
+}
+
+// Write a new comic script for an already written story (keeps the story text the storyteller approved),
+// then draw it again.
+export async function remakeComic(store, answerId, { fetchImpl = fetch } = {}) {
+  const answer = await store.answerById(answerId);
+  if (!answer || answer.status !== "ready" || !answer.story) return;
+  try {
+    const teller = await store.storytellerById(answer.storyteller_id);
+    const parts = latestParts(await store.listParts(answerId)).filter((p) => p.transcript && p.transcript.trim());
+    await store.updateAnswer(answerId, { comic_status: "drawing", comic_error: "Writing the new comic script…", comic_started_at: new Date().toISOString() });
+    const comic = await comicScriptFor(teller, answer, parts, { story: answer.story, title: answer.title }, { fetchImpl });
+    const oldClips = clipPaths(answer);
+    await store.updateAnswer(answerId, { comic_script: comic });
+    if (oldClips.length) await store.remove("media", oldClips);
+    await syncClips(store, answerId);
+    await store.updateAnswer(answerId, { comic_error: "Drawing the new comic…" });
+    if (!(await startInOwnCall({ action: "comic-draw", answerId, force: true }))) {
+      await comicThenVideo(store, answerId, { force: true, newSheet: true, fetchImpl });
+    }
+  } catch (err) {
+    console.error("remakeComic failed", answerId, err);
+    await store.updateAnswer(answerId, { comic_status: "failed", comic_error: String(err.message || err).slice(0, 500) });
+  }
+}
+
 // Combine all parts of a story into one story, a comic script and life-card details.
 export async function processAnswer(store, answerId, { fetchImpl = fetch } = {}) {
   let answer = await store.answerById(answerId);
@@ -103,24 +158,16 @@ export async function processAnswer(store, answerId, { fetchImpl = fetch } = {})
 
     const written = await writeStory({
       name: teller.name,
+      from: teller.from_name,
       lang: teller.lang,
       relationship: teller.relationship,
+      about: aboutOf(teller),
       question: answer.question_text,
       parts: parts.map((p) => ({ question: p.question_text, text: p.transcript, spoken: Boolean(p.audio_path) })),
       lifeCard: teller.life_card
     }, { fetchImpl });
+    const comic = await comicScriptFor(teller, answer, parts, written, { fetchImpl });
 
-    // Find where each panel's quote was spoken: first in the answer the writer named, then in any other.
-    const panels = (written.comic?.panels || []).map((p) => {
-      const named = parts[Number(p.quote_answer) - 1];
-      const order = named ? [named, ...parts.filter((x) => x !== named)] : parts;
-      for (const part of order) {
-        if (!part.audio_path) continue;
-        const clip = findClip(part.words, p.quote);
-        if (clip) return { ...p, voice_clip: { ...clip, part_id: part.id } };
-      }
-      return { ...p, voice_clip: null };
-    });
     const oldClips = clipPaths(answer);
     await store.updateAnswer(answerId, {
       status: "ready",
@@ -128,7 +175,7 @@ export async function processAnswer(store, answerId, { fetchImpl = fetch } = {})
       title: written.title,
       story: written.story,
       details: written.details,
-      comic_script: { ...written.comic, panels },
+      comic_script: comic,
       follow_up_questions: written.follow_up_questions || []
     });
 
@@ -142,7 +189,9 @@ export async function processAnswer(store, answerId, { fetchImpl = fetch } = {})
     // A rewritten story that was already approved gets a fresh comic for its new script.
     const done = await store.answerById(answerId);
     if (done && done.approval === "approved" && autoComicsOn()) {
-      await comicThenVideo(store, answerId, { force: true, newSheet: true, fetchImpl });
+      if (!(await startInOwnCall({ action: "comic-draw", answerId, force: true }))) {
+        await comicThenVideo(store, answerId, { force: true, newSheet: true, fetchImpl });
+      }
     }
   } catch (err) {
     console.error("processAnswer failed", answerId, err);

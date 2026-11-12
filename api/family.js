@@ -49,6 +49,9 @@ export default async function handler(req, res) {
         items.push({
           url: await store.signedUrl("media", m.path, HOUR),
           caption: p.caption || "",
+          dialogue: Array.isArray(p.dialogue) ? p.dialogue.map((d) => ({ speaker: d.speaker || "", side: d.side, text: d.text || "" })) : [],
+          shape: p.shape || null,
+          page: p.page || null,
           clipUrl: a.allow_voice && p.clip_path ? await store.signedUrl("media", p.clip_path, HOUR) : null
         });
       }
