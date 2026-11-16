@@ -20,6 +20,7 @@ import { getStore } from "./_lib/store.js";
 import { send, fail, readJson, isAdmin, cleanText, inBackground } from "./_lib/http.js";
 import { processAnswer, mergeLifeCard, remakeComic } from "./_lib/pipeline.js";
 import { GENDERS, aboutOf } from "./_lib/roles.js";
+import { photoMeta } from "./_lib/photos.js";
 import { generateComic, STALE_MS } from "./_lib/comic.js";
 import { makeVideo, APP_VIDEO, comicThenVideo } from "./_lib/video.js";
 import { env } from "./_lib/store.js";
@@ -80,6 +81,7 @@ export default async function handler(req, res) {
         for (const m of media) {
           mediaOut.push({
             id: m.id, answerId: m.answer_id, kind: m.kind, title: m.title, status: m.status, panelIndex: m.panel_index,
+            photo: m.kind === "photo" ? photoMeta(m, t) : null,
             appMade: m.kind === "video" && m.panel_index === APP_VIDEO, createdAt: m.created_at, ageSec: ageSec(m.created_at),
             url: ["published", "draft", "reference"].includes(m.status) ? await store.signedUrl("media", m.path, 60 * 60) : null
           });

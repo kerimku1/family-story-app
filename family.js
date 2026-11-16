@@ -119,7 +119,7 @@
       h("p", { class: "lead", text: t.familyLead }),
       h("p", { class: "small", text: t.collected(data.collected) }));
 
-    add(renderAsked(t));
+    add(renderAsked(t), askerPhotoCard(t));
 
     if (!data.comics.length && !data.media.length) {
       add(h("div", { class: "card empty" }, h("span", { class: "icon", svg: ICON_FILM }), h("p", { text: t.familyEmpty })));
@@ -200,7 +200,7 @@
         Object.assign(ask.sel, patch);
         ask.notice = null;
         render();
-      }, { fixedRelationship: Boolean(data.relationship), hideKeys: asked.map(function (q) { return q.key; }).filter(Boolean) }));
+      }, { fixedRelationship: Boolean(data.relationship), gender: data.gender || null, hideKeys: asked.map(function (q) { return q.key; }).filter(Boolean) }));
       if (ask.notice) parts.push(h("div", { class: "notice bad", role: "alert", text: ask.notice }));
       parts.push(
         h("button", { class: "btn btn-primary", type: "button", disabled: ask.sending, onclick: sendAsk }, ask.sending ? t.preparing : t.askSend),
@@ -223,7 +223,7 @@
     const t = I18N[lang].ui;
     const qlang = I18N[data.lang] ? data.lang : "ru";
     if (!ask.sel.relationship) { ask.notice = t.needRelationship; return render(); }
-    const mainQuestion = window.Chooser.mainText(ask.sel, qlang);
+    const mainQuestion = window.Chooser.mainText(ask.sel, qlang, data.gender);
     if (!mainQuestion) { ask.notice = t.needQuestion; return render(); }
     ask.sending = true;
     ask.notice = null;
@@ -246,6 +246,38 @@
     }
     ask.sending = false;
     render();
+  }
+
+  // The asker's own photo, so the comic draws them to look like themselves.
+  let photoBusy = false;
+  let photoError = "";
+  function askerPhotoCard(t) {
+    const file = h("input", { type: "file", accept: "image/jpeg,image/png,image/webp", class: "hidden-file", tabindex: "-1", "aria-hidden": "true" });
+    file.addEventListener("change", function () { if (file.files && file.files[0]) uploadAskerPhoto(file.files[0]); });
+    return h("section", { class: "card photos-card" },
+      h("h2", { text: t.askerPhotoTitle }),
+      h("p", { class: "small", text: data.hasAskerPhoto ? t.askerPhotoDone : t.askerPhotoLead }),
+      photoError ? h("div", { class: "notice bad", role: "alert", text: photoError }) : null,
+      file,
+      h("button", { class: "btn btn-secondary", type: "button", disabled: photoBusy, onclick: function () { file.click(); } }, photoBusy ? t.photoUploading : t.askerPhotoBtn));
+  }
+
+  async function uploadAskerPhoto(f) {
+    const post = function (body) {
+      return fetch("/api/family", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(Object.assign({ f: token }, body)) })
+        .then(function (r) { return r.ok ? r.json() : Promise.reject(new Error("failed")); });
+    };
+    photoBusy = true; photoError = ""; render();
+    try {
+      const slot = await post({ action: "photo-upload-url", mime: f.type });
+      const put = await fetch(slot.uploadUrl, { method: "PUT", headers: { "content-type": f.type, "x-upsert": "false" }, body: f });
+      if (!put.ok) throw new Error("upload failed");
+      await post({ action: "photo-done", mediaId: slot.mediaId });
+      data.hasAskerPhoto = true;
+    } catch (e) {
+      photoError = I18N[lang].ui.photoFail;
+    }
+    photoBusy = false; render();
   }
 
   // The storyteller's link is private to them. The family page shows it only on the device

@@ -7,6 +7,8 @@
 // POST { t, action: "finish", answerId }                         → write the story from all parts
 // POST { t, action: "approve", answerId, approval: "approved"|"hidden" }
 // POST { t, action: "voice", answerId, allow: true|false }       → may short voice clips play in the comic?
+// POST { t, action: "photo-upload-url", who: "teller"|"other", name?, year?, mime } → { mediaId, uploadUrl }
+// POST { t, action: "photo-done", mediaId } / { t, action: "photo-delete", mediaId }
 // POST { t, action: "delete", answerId }                         → deletes recordings, story, clips and pictures
 import { getStore } from "./_lib/store.js";
 import { send, fail, readJson, query, extFor, inBackground } from "./_lib/http.js";
@@ -15,6 +17,9 @@ import { syncClips } from "./_lib/clips.js";
 import { autoComicsOn } from "./_lib/comic.js";
 import { comicThenVideo } from "./_lib/video.js";
 import { storyProgress, deleteStory } from "./_lib/stories.js";
+import { photoMeta, startPhotoUpload, finishPhotoUpload, deletePhoto } from "./_lib/photos.js";
+
+const MY_PHOTOS = ["teller", "other"]; // what the storyteller may add from their page
 
 export const config = { maxDuration: 300 };
 
@@ -65,9 +70,28 @@ export default async function handler(req, res) {
     if (!teller) return fail(res, 404, "Link not found");
 
     if (req.method === "GET") {
-      return send(res, 200, tellerView(teller, await store.listAnswers(teller.id), await store.listPartsForStoryteller(teller.id)));
+      const view = tellerView(teller, await store.listAnswers(teller.id), await store.listPartsForStoryteller(teller.id));
+      // Their own photos (of themselves and of people in their stories), used only for drawing.
+      view.photos = [];
+      for (const m of (await store.listMedia(teller.id)).filter((x) => x.kind === "photo" && x.status === "reference")) {
+        const meta = photoMeta(m, teller);
+        if (!MY_PHOTOS.includes(meta.who)) continue;
+        view.photos.push({ id: m.id, who: meta.who, name: meta.name, year: meta.year, url: await store.signedUrl("media", m.path, 60 * 60) });
+      }
+      return send(res, 200, view);
     }
     if (req.method !== "POST") return fail(res, 405, "GET or POST only");
+
+    if (body.action === "photo-upload-url") {
+      const slot = await startPhotoUpload(store, teller, body, MY_PHOTOS);
+      return slot.error ? fail(res, 400, slot.error) : send(res, 200, slot);
+    }
+    if (body.action === "photo-done") {
+      return (await finishPhotoUpload(store, teller, body.mediaId, MY_PHOTOS)) ? send(res, 200, { ok: true }) : fail(res, 404, "Photo not found");
+    }
+    if (body.action === "photo-delete") {
+      return (await deletePhoto(store, teller, body.mediaId, MY_PHOTOS)) ? send(res, 200, { ok: true }) : fail(res, 404, "Photo not found");
+    }
 
     // "uploaded" works on a part; every other action on one of this storyteller's stories.
     if (body.action === "uploaded") {

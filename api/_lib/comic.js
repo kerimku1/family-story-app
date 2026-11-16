@@ -8,9 +8,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { env } from "./store.js";
 import { ffmpegPath, run } from "./clips.js";
+import { drawingPhotos } from "./photos.js";
 
 const DEFAULT_MODEL = "gemini-3.1-flash-image-preview";
-const MAX_PHOTOS = 3;
 const PARALLEL = 4;            // panels drawn at the same time
 export const STALE_MS = 6 * 60 * 1000; // a "drawing" job older than this is treated as stuck
 // The server stops a job after 300 s, so drawing gives up in time to save what it has and say so.
@@ -58,19 +58,29 @@ function styleLines(script, tellerName) {
 
 const NO_TEXT = "IMPORTANT: no text of any kind in the image — no captions, no speech bubbles, no letters, no words, no signs, no numbers, no watermark. The app adds the text later.";
 
-function photoNote(script, photoCount, firstIndex) {
-  if (!photoCount) return [];
+// photos: [{ who, name, role, year }] in the order the images are attached.
+function photoNote(script, photos, firstIndex) {
+  if (!photos || !photos.length) return [];
   const me = storytellerCharacter(script);
-  const range = photoCount === 1 ? `Image ${firstIndex} is a real photo` : `Images ${firstIndex}–${firstIndex + photoCount - 1} are real photos`;
-  return [`${range} of the storyteller. Base ${me ? `"${me.name}"` : "the storyteller"}'s face and features on them, drawn at the age in this story. Keep the drawing style; do not copy the photo's background or clothes unless they fit the scene.`];
+  const lines = photos.map((ph, k) => {
+    const character = ph.who === "teller" && me ? `the character "${me.name}"` : `the character "${ph.name}"`;
+    return `Image ${firstIndex + k} is a real photo of ${ph.name} (${ph.role})${ph.year ? `, taken around ${ph.year}` : ""}: ${character}.`;
+  });
+  lines.push(
+    "Draw these people so their own family would recognise them: keep the face shape, eyes, eyebrows, nose, mouth and hair type from the photo.",
+    `Draw each at the age the scene needs${script.story_period ? ` (the memory takes place in ${script.story_period})` : ""}: where the scene is years before the photo, make them clearly younger (smoother skin, fuller and darker hair, the clothes of that time) but unmistakably the same person.`,
+    "Keep the drawing style; do not copy a photo's background or clothes unless they fit the scene."
+  );
+  return lines;
 }
 
-export function sheetPrompt(script, tellerName, photoCount) {
+export function sheetPrompt(script, tellerName, photos) {
   return [
     ...styleLines(script, tellerName),
     "",
     "Draw a character reference sheet: every character above, full body, front view and three-quarter view, side by side on a plain light background. Make each character's gender, age, face, hair and clothes unmistakable.",
-    ...photoNote(script, photoCount, 1),
+    "If a character appears both today and in the memory, draw both versions next to each other.",
+    ...photoNote(script, photos, 1),
     NO_TEXT
   ].join("\n");
 }
@@ -80,7 +90,7 @@ export function panelAspect(panel) {
   return panel && panel.shape === "wide" ? "16:9" : panel && panel.shape === "square" ? "1:1" : "4:3";
 }
 
-export function panelPrompt(script, index, tellerName, { hasSheet, photoCount }) {
+export function panelPrompt(script, index, tellerName, { hasSheet, photos }) {
   const panels = script.panels || [];
   const p = panels[index] || {};
   const byName = new Map((script.characters || []).map((c) => [c.name, c]));
@@ -93,7 +103,7 @@ export function panelPrompt(script, index, tellerName, { hasSheet, photoCount })
   const hasText = Boolean((p.dialogue && p.dialogue.length) || p.caption);
   const refs = [];
   if (hasSheet) refs.push("Image 1 is the character sheet for this comic: draw every character exactly as on it (gender, face, hair, clothes, proportions).");
-  refs.push(...photoNote(script, photoCount, hasSheet ? 2 : 1));
+  refs.push(...photoNote(script, photos, hasSheet ? 2 : 1));
   return [
     ...styleLines(script, tellerName),
     "",
@@ -220,16 +230,16 @@ async function removeMedia(store, list) {
   for (const m of list) await store.deleteMedia(m.id);
 }
 
-async function loadPhotos(store, storytellerId) {
-  const photos = (await store.listMedia(storytellerId))
-    .filter((m) => m.kind === "photo" && m.status === "reference")
-    .slice(-MAX_PHOTOS);
-  const out = [];
-  for (const m of photos) {
-    const blob = await store.download("media", m.path);
-    out.push(await shrinkPhoto(Buffer.from(await blob.arrayBuffer()), String(m.path).split(".").pop()));
+// Returns the images to attach and who is in each.
+async function loadPhotos(store, teller) {
+  const images = [];
+  const metas = [];
+  for (const { media, meta } of await drawingPhotos(store, teller)) {
+    const blob = await store.download("media", media.path);
+    images.push(await shrinkPhoto(Buffer.from(await blob.arrayBuffer()), String(media.path).split(".").pop()));
+    metas.push(meta);
   }
-  return out;
+  return { images, metas };
 }
 
 async function loadSheet(store, answerId) {
@@ -284,13 +294,13 @@ export async function generateComic(store, answerId, { panelIndexes = null, newS
   };
   try {
     const teller = await store.storytellerById(answer.storyteller_id);
-    const photos = await loadPhotos(store, answer.storyteller_id);
+    const { images: photos, metas } = await loadPhotos(store, teller);
     const before = (await store.listMediaForAnswer(answerId)).filter((m) => m.kind === "panel");
     const live = before.some((m) => m.status === "published");
 
     let sheet = newSheet || !panelIndexes ? null : await loadSheet(store, answerId);
     if (!sheet) {
-      sheet = await drawImage(sheetPrompt(script, teller.name, photos.length), photos, { aspectRatio: "3:2", fetchImpl, deadline });
+      sheet = await drawImage(sheetPrompt(script, teller.name, metas), photos, { aspectRatio: "3:2", fetchImpl, deadline });
       const old = (await store.listMediaForAnswer(answerId)).filter((m) => m.kind === "sheet");
       await saveImage(store, answer, "sheet", null, sheet, "reference");
       await removeMedia(store, old);
@@ -300,7 +310,7 @@ export async function generateComic(store, answerId, { panelIndexes = null, newS
     let saved = 0;
     await pool(wanted, PARALLEL, async (index) => {
       try {
-        const prompt = panelPrompt(script, index, teller.name, { hasSheet: true, photoCount: photos.length });
+        const prompt = panelPrompt(script, index, teller.name, { hasSheet: true, photos: metas });
         const image = await drawImage(prompt, [sheet, ...photos], { aspectRatio: panelAspect(script.panels[index]), fetchImpl, deadline });
         const { mine } = await check();
         if (!mine) return;

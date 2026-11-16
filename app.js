@@ -40,6 +40,10 @@
     name: "",
     from: "",
     stories: [],
+    photos: [],
+    photoForm: { who: "teller", name: "", year: "" },
+    photoBusy: false,
+    photoNotice: "",
     current: null,          // id of the story being answered
     screen: "welcome",
     index: 0,
@@ -281,6 +285,7 @@
     state.from = data.from;
     state.qlang = I18N[data.lang] ? data.lang : "ru";
     state.stories = data.stories || [];
+    state.photos = data.photos || [];
     if (!story()) {
       const open = openStories();
       state.current = open.length ? open[open.length - 1].id : null;
@@ -523,6 +528,7 @@
       h("section", { class: "card main-q" }, h("p", { class: "main-q-text", text: s.main })),
       h("p", { class: "lead", text: a === n ? t.finishLead : t.finishPartial(a, n) }),
       state.notice ? h("div", { class: "notice " + state.notice.kind, role: "status", text: state.notice.text }) : null,
+      photosBlock(),
       a ? h("button", { class: "btn btn-primary", type: "button", disabled: state.sending, onclick: finishStory }, state.sending ? t.sending : t.finishBtn) : null,
       h("button", { class: "btn btn-secondary", type: "button", disabled: state.sending, onclick: function () { state.index = firstOpenPart(); go("question"); } }, t.backToQuestions));
   }
@@ -602,7 +608,71 @@
         body,
         h("button", { class: "btn btn-quiet danger", type: "button", onclick: function () { deleteStory(s); } }, t.deleteRec)));
     });
+    add(photosBlock());
     if (openStories().length) add(h("button", { class: "btn btn-secondary", type: "button", onclick: function () { go("welcome"); } }, t.questionsForYou));
+  }
+
+  // ---------- Photos for drawing (of the storyteller, or of someone in the story) ----------
+  function photosBlock() {
+    const t = T();
+    const f = state.photoForm;
+    const name = h("input", { type: "text", maxlength: "40", placeholder: t.photoNamePh, "aria-label": t.photoNamePh });
+    name.value = f.name;
+    name.addEventListener("input", function () { f.name = name.value; });
+    const year = h("input", { type: "text", inputmode: "numeric", maxlength: "20", placeholder: t.photoYearPh, "aria-label": t.photoYearPh });
+    year.value = f.year;
+    year.addEventListener("input", function () { f.year = year.value; });
+    const file = h("input", { type: "file", accept: "image/jpeg,image/png,image/webp", class: "hidden-file", tabindex: "-1", "aria-hidden": "true" });
+    file.addEventListener("change", function () { if (file.files && file.files[0]) uploadPhoto(file.files[0]); });
+    const who = function (value, label) {
+      return h("button", { type: "button", class: "chip", "aria-pressed": String(f.who === value), onclick: function () { f.who = value; state.photoNotice = ""; render(); } }, label);
+    };
+    return h("section", { class: "card photos-card" },
+      h("h2", { text: t.photosTitle }),
+      h("p", { class: "small", text: t.photosLead }),
+      state.photos.length ? h("div", { class: "photo-list" }, state.photos.map(function (ph) {
+        return h("div", { class: "photo-item" },
+          h("img", { src: ph.url, alt: ph.name }),
+          h("span", { class: "small", text: ph.name + (ph.year ? ", " + ph.year : "") }),
+          h("button", { class: "btn btn-quiet danger", type: "button", onclick: function () { deletePhoto(ph); } }, t.photoDelete));
+      })) : null,
+      h("div", { class: "chips" }, who("teller", t.photoMe), who("other", t.photoOther)),
+      f.who === "other" ? name : null,
+      year,
+      state.photoNotice ? h("div", { class: "notice bad", role: "alert", text: state.photoNotice }) : null,
+      file,
+      h("button", { class: "btn btn-secondary", type: "button", disabled: state.photoBusy, onclick: function () {
+        if (f.who === "other" && !f.name.trim()) { state.photoNotice = t.photoNeedName; render(); return; }
+        file.click();
+      } }, state.photoBusy ? t.photoUploading : t.photoAdd));
+  }
+
+  async function uploadPhoto(f) {
+    const form = state.photoForm;
+    state.photoBusy = true;
+    state.photoNotice = "";
+    render();
+    try {
+      const slot = await api("POST", "/api/teller", { t: token, action: "photo-upload-url", who: form.who, name: form.name, year: form.year, mime: f.type });
+      const put = await fetch(slot.uploadUrl, { method: "PUT", headers: { "content-type": f.type, "x-upsert": "false" }, body: f });
+      if (!put.ok) throw new Error("upload failed");
+      await api("POST", "/api/teller", { t: token, action: "photo-done", mediaId: slot.mediaId });
+      const data = await api("GET", "/api/teller?t=" + encodeURIComponent(token));
+      state.photos = data.photos || [];
+      state.photoForm = { who: "teller", name: "", year: "" };
+    } catch (e) {
+      state.photoNotice = T().photoFail;
+    }
+    state.photoBusy = false;
+    render();
+  }
+
+  async function deletePhoto(ph) {
+    try {
+      await api("POST", "/api/teller", { t: token, action: "photo-delete", mediaId: ph.id });
+      state.photos = state.photos.filter(function (x) { return x.id !== ph.id; });
+    } catch (e) { /* keep it listed */ }
+    render();
   }
 
   async function setVoice(s, allow) {

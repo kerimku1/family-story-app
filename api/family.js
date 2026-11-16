@@ -7,6 +7,8 @@
 import { getStore } from "./_lib/store.js";
 import { send, fail, query, readJson } from "./_lib/http.js";
 import { RELATIONSHIPS, cleanMain, createStory, storyProgress } from "./_lib/stories.js";
+import { aboutOf } from "./_lib/roles.js";
+import { photoMeta, startPhotoUpload, finishPhotoUpload } from "./_lib/photos.js";
 
 export const config = { maxDuration: 60 };
 
@@ -22,6 +24,14 @@ export default async function handler(req, res) {
     if (!teller) return fail(res, 404, "Link not found");
 
     if (req.method === "POST") {
+      // The asker may add a photo of themselves, so the comic draws them right. It is never shown here.
+      if (body.action === "photo-upload-url") {
+        const slot = await startPhotoUpload(store, teller, { ...body, who: "asker" }, ["asker"]);
+        return slot.error ? fail(res, 400, slot.error) : send(res, 200, slot);
+      }
+      if (body.action === "photo-done") {
+        return (await finishPhotoUpload(store, teller, body.mediaId, ["asker"])) ? send(res, 200, { ok: true }) : fail(res, 404, "Photo not found");
+      }
       if (body.action !== "ask") return fail(res, 400, "Unknown action");
       const main = cleanMain(body);
       if (!main.mainQuestion) return fail(res, 400, "Choose a question");
@@ -84,6 +94,8 @@ export default async function handler(req, res) {
       from: teller.from_name,
       lang: teller.lang,
       relationship: teller.relationship || null,
+      gender: aboutOf(teller).gender,
+      hasAskerPhoto: (await store.listMedia(teller.id)).some((m) => m.kind === "photo" && m.status === "reference" && photoMeta(m, teller).who === "asker"),
       asked,
       collected: answers.filter((a) => ["uploaded", "processing", "ready"].includes(a.status)).length,
       comics,

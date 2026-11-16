@@ -14,10 +14,16 @@
   };
 
   // The main question text for a selection, in the questions' language.
-  function mainText(sel, qlang) {
+  // A text may be a pair: [for a woman storyteller, for a man storyteller].
+  function wording(q, qlang, gender) {
+    const v = q[qlang] || q.ru;
+    return Array.isArray(v) ? v[gender === "male" ? 1 : 0] : v;
+  }
+
+  function mainText(sel, qlang, gender) {
     if (sel.key === "custom") return String(sel.custom || "").trim();
     const q = (BANK[sel.relationship] || []).find(function (x) { return x.id === sel.key; });
-    return q ? q[qlang] || q.ru : "";
+    return q ? wording(q, qlang, gender || sel.gender) : "";
   }
 
   // h = the page's element helper; t = interface texts; qlang = language of the questions.
@@ -49,7 +55,9 @@
         roleRow(t.whoThey, "gender", t.roleThey[sel.relationship]),
         roleRow(t.whoYou, "askerGender", t.roleYou[sel.relationship])));
     }
-    if (sel.relationship) {
+    // The questions are worded for the person who answers, so we need to know who that is first.
+    const gender = opts.gender || sel.gender;
+    if (sel.relationship && (gender || opts.fixedRelationship || !t.roleThey)) {
       // Questions already asked are left out (opts.hideKeys), unless one is the current choice.
       const hide = new Set(opts.hideKeys || []);
       const list = (BANK[sel.relationship] || []).filter(function (q) { return !hide.has(q.id) || q.id === sel.key; });
@@ -61,7 +69,7 @@
         return h("button", {
           type: "button", class: "q-option", role: "radio", "aria-checked": String(sel.key === q.id),
           onclick: function () { onChange({ key: q.id }); }
-        }, q[qlang] || q.ru);
+        }, wording(q, qlang, gender));
       })));
       if (limit < list.length) {
         parts.push(h("button", { type: "button", class: "btn btn-quiet", onclick: function () { onChange({ showAll: true }); } }, t.showAll));

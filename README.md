@@ -129,6 +129,10 @@ Each approved story becomes a short graphic-novel episode: 3–4 pages, 10–14 
 
 **Who is who.** When creating a link, the asker chooses who the person is (mother/father, son/daughter, girlfriend·wife/boyfriend·husband, friend) and who they are, so both are drawn right and the story knows who "you" is. For people created earlier, set it in the studio under **Who is who**, then tap **Make a new comic**.
 
+**Photos.** The storyteller can add photos on their own page (of themselves, or of someone in the story, with the year), and the asker can add their own photo on the family page. They are used only as drawing references: the artist is told who is in each photo and draws them at the age they were in the memory. The family page never shows them.
+
+**The shape of every comic.** It opens today with the asker asking the question, goes into the memory with the real conversation between the people who were there, and ends today with the storyteller's own words to the asker.
+
 Cost: about $0.07 per picture with Gemini, so roughly $0.80–1.00 per comic.
 
 ### Animated video (automatic)

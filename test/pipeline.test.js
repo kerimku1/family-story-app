@@ -402,7 +402,8 @@ test("automatic comics: approval draws a sheet and panels with the photos, redra
       const text = c.body.contents[0].parts[0].text;
       assert.match(text, /no text of any kind/);
       assert.match(text, /Image 1 is the character sheet/);
-      assert.match(text, /"Narrator as a girl"'s face/);
+      assert.match(text, /Image 2 is a real photo of Мама \(the storyteller, the parent\): the character "Narrator as a girl"/);
+      assert.match(text, /clearly younger/);
       assert.equal(c.body.contents[0].parts.length, 3, "panel gets sheet + photo");
       assert.match(text, /\(woman, /, "characters are drawn with their gender");
       assert.match(text, /TOP QUARTER/, "room left for speech bubbles");
@@ -736,6 +737,64 @@ test("who is who: saved from the link, used in every prompt, editable in the stu
     assert.equal(fam.comics[0].panels[1].shape, "square");
     assert.equal(fam.comics[0].panels[1].dialogue[0].text, "Бери, пока горячие!");
     assert.equal(JSON.stringify(fam).includes("синими ставнями. Каждое"), false);
+  } finally {
+    delete process.env.GEMINI_API_KEY;
+    delete process.env.AUTO_VIDEO;
+    server.close();
+  }
+});
+
+test("photos: the storyteller and the asker add their own; each is labelled for the artist; family never sees them", async () => {
+  const { server, store, apiLog, url } = await startTestServer(8787);
+  const { post, get, waitFor, tokens, latestStory } = client(url);
+  process.env.GEMINI_API_KEY = "test-gemini";
+  process.env.AUTO_VIDEO = "off";
+  const { execFileSync } = await import("node:child_process");
+  const ffmpeg = (await import("ffmpeg-static")).default;
+  const jpeg = execFileSync(ffmpeg, ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=teal:s=400x300", "-frames:v", "1", "-f", "mjpeg", "pipe:1"], { maxBuffer: 1 << 24 });
+  const upload = async (path, body, done) => {
+    const slot = await post(path, { ...body, action: "photo-upload-url", mime: "image/jpeg" });
+    assert.equal(slot.status, 200, JSON.stringify(slot.body));
+    await fetch(slot.body.uploadUrl, { method: "PUT", headers: { "content-type": "image/jpeg" }, body: jpeg });
+    assert.equal((await post(path, { ...done, action: "photo-done", mediaId: slot.body.mediaId })).status, 200);
+    return slot.body.mediaId;
+  };
+  try {
+    const created = await post("/api/create", { from: "Мухамед", name: "Мама", lang: "ru", relationship: "parent", gender: "female", askerGender: "male", mainKey: "a01", mainQuestion: "Как Вы познакомились с папой?" });
+    const { t, f } = tokens(created.body);
+    const id = (await latestStory(t)).id;
+
+    await upload("/api/teller", { t, who: "teller", year: "2020" }, { t });
+    assert.equal((await post("/api/teller", { t, action: "photo-upload-url", who: "other", mime: "image/jpeg" })).status, 400, "another person needs a name");
+    const dad = await upload("/api/teller", { t, who: "other", name: "Папа", year: "1990" }, { t });
+    await upload("/api/family", { f }, { f });
+    // The family page can only add the asker's photo, and can't finish someone else's upload.
+    assert.equal((await post("/api/family", { f, action: "photo-done", mediaId: dad })).status, 404);
+
+    const view = await get(`/api/teller?t=${t}`);
+    assert.deepEqual(view.photos.map((p) => [p.who, p.name, p.year]), [["teller", "Мама", "2020"], ["other", "Папа", "1990"]], "the storyteller sees their photos, not the asker's");
+    const fam = await get(`/api/family?f=${f}`);
+    assert.equal(fam.hasAskerPhoto, true);
+    assert.equal(JSON.stringify(fam).includes(".jpg"), false, "no photo links on the family page");
+
+    await post("/api/teller", { t, action: "text-answer", answerId: id, partIndex: 0, text: "Мы познакомились на танцах в 1988 году." });
+    await post("/api/teller", { t, action: "finish", answerId: id });
+    await waitFor(() => store.db.answers[0].status === "ready");
+    const comicPrompt = apiLog.filter((c) => c.service === "anthropic").map((c) => c.body.messages[0].content).find((p) => /Turn a real family story/.test(p));
+    assert.match(comicPrompt, /real photos to draw from: Мама \(the storyteller, the mother, photo from 2020\); Мухамед \(the asker, the son\); Папа \(a person in the story, photo from 1990\)/);
+    assert.match(comicPrompt, /Open in the present: Мухамед asks Мама the question/);
+
+    await post("/api/teller", { t, action: "approve", answerId: id, approval: "approved" });
+    await waitFor(() => ["ready", "failed", "partial"].includes(store.db.answers[0].comic_status));
+    assert.equal(store.db.answers[0].comic_status, "ready", store.db.answers[0].comic_error || "");
+    const sheet = apiLog.find((c) => c.service === "gemini").body.contents[0].parts;
+    assert.equal(sheet.length, 4, "prompt + three photos");
+    assert.match(sheet[0].text, /Image 1 is a real photo of Мама \(the storyteller, the mother\), taken around 2020/);
+    assert.match(sheet[0].text, /Image 2 is a real photo of Мухамед \(the asker, the son\)/);
+    assert.match(sheet[0].text, /Image 3 is a real photo of Папа \(a person in the story\), taken around 1990: the character "Папа"/);
+
+    assert.equal((await post("/api/teller", { t, action: "photo-delete", mediaId: dad })).status, 200);
+    assert.equal(store.db.media.filter((m) => m.kind === "photo").length, 2);
   } finally {
     delete process.env.GEMINI_API_KEY;
     delete process.env.AUTO_VIDEO;

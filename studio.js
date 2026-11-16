@@ -391,11 +391,11 @@
     const photos = t.media.filter(function (m) { return m.kind === "photo" && m.url; });
     const key = t.id + ":photo";
     return h("section", { class: "card photos" },
-      h("h2", { text: "Photos of " + t.name + " (optional)" }),
-      h("p", { class: "meta", text: "Only used so the drawings look like them. The family never sees these. Clear, front-facing photos work best; the newest 3 are used." }),
+      h("h2", { text: "Photos for drawing" }),
+      h("p", { class: "meta", text: "Only used so the drawings look like the real people; the family page never shows them. " + t.name + " can add photos on their own page, and " + t.from + " on the family page. Photos you add here count as photos of " + t.name + "." }),
       photos.length ? h("div", { class: "thumbs" }, photos.map(function (m) {
         return h("div", { class: "thumb" }, h("img", { src: m.url, alt: m.title || "photo" }),
-          h("div", null, h("span", { text: m.title || "" }),
+          h("div", null, h("span", { text: m.photo ? m.photo.name + (m.photo.year ? ", " + m.photo.year : "") : "" }),
             h("button", { class: "btn btn-quiet danger", type: "button", onclick: function () { removeMedia(m, "Delete this photo?"); } }, "Delete")));
       })) : null,
       fileButton(photos.length ? "Add another photo" : "Add a photo", "image/png,image/jpeg,image/webp", busy === key, function (f) { uploadPhoto(t, f, key); }, "btn-secondary"));

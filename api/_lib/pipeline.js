@@ -2,6 +2,7 @@
 // each recording → transcript with word timings; all parts → one story + details + comic script → life card.
 import { transcribe, writeStory, writeComic } from "./ai.js";
 import { aboutOf } from "./roles.js";
+import { drawingPhotos } from "./photos.js";
 import { syncClips, clipPaths } from "./clips.js";
 import { autoComicsOn } from "./comic.js";
 import { comicThenVideo } from "./video.js";
@@ -91,7 +92,8 @@ export async function transcribePart(store, partId, { fetchImpl = fetch } = {}) 
 
 // The comic script for a written story, with the moments where each panel's quote was spoken
 // (first in the answer the writer named, then in any other), so real-voice clips can be cut.
-async function comicScriptFor(teller, answer, parts, written, { fetchImpl }) {
+async function comicScriptFor(store, teller, answer, parts, written, { fetchImpl }) {
+  const photos = (await drawingPhotos(store, teller)).map((p) => p.meta);
   const script = await writeComic({
     name: teller.name,
     from: teller.from_name,
@@ -101,7 +103,8 @@ async function comicScriptFor(teller, answer, parts, written, { fetchImpl }) {
     question: answer.question_text,
     parts: parts.map((p) => ({ question: p.question_text, text: p.transcript, spoken: Boolean(p.audio_path) })),
     story: written.story,
-    title: written.title
+    title: written.title,
+    photos
   }, { fetchImpl });
   const panels = (script.panels || []).map((p) => {
     if (!String(p.quote || "").trim()) return { ...p, voice_clip: null };
@@ -126,7 +129,7 @@ export async function remakeComic(store, answerId, { fetchImpl = fetch } = {}) {
     const teller = await store.storytellerById(answer.storyteller_id);
     const parts = latestParts(await store.listParts(answerId)).filter((p) => p.transcript && p.transcript.trim());
     await store.updateAnswer(answerId, { comic_status: "drawing", comic_error: "Writing the new comic script…", comic_started_at: new Date().toISOString() });
-    const comic = await comicScriptFor(teller, answer, parts, { story: answer.story, title: answer.title }, { fetchImpl });
+    const comic = await comicScriptFor(store, teller, answer, parts, { story: answer.story, title: answer.title }, { fetchImpl });
     const oldClips = clipPaths(answer);
     await store.updateAnswer(answerId, { comic_script: comic });
     if (oldClips.length) await store.remove("media", oldClips);
@@ -166,7 +169,7 @@ export async function processAnswer(store, answerId, { fetchImpl = fetch } = {})
       parts: parts.map((p) => ({ question: p.question_text, text: p.transcript, spoken: Boolean(p.audio_path) })),
       lifeCard: teller.life_card
     }, { fetchImpl });
-    const comic = await comicScriptFor(teller, answer, parts, written, { fetchImpl });
+    const comic = await comicScriptFor(store, teller, answer, parts, written, { fetchImpl });
 
     const oldClips = clipPaths(answer);
     await store.updateAnswer(answerId, {

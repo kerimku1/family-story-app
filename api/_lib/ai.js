@@ -58,6 +58,7 @@ export const STORY_SCHEMA = obj({
 // the app draws the narration boxes and speech bubbles itself, so they are always spelled right.
 export const COMIC_SCHEMA = obj({
   style_notes: str("In English: era, place, colour palette and mood for the artist"),
+  story_period: str("When the memory takes place, e.g. '1988' or 'late 1980s, winter'; empty if unknown"),
   storyteller_voice: { type: "string", enum: ["female", "male", "unknown"], description: "The storyteller's gender (for the narrator voice)" },
   characters: list(obj({
     name: str("Name as used in the dialogue, e.g. 'Mo' or 'Mama'"),
@@ -121,7 +122,7 @@ export function storyPrompt({ name, from, lang, question, parts, lifeCard, relat
   ].join("\n");
 }
 
-export function comicPrompt({ name, from, lang, question, parts, story, title, relationship, about }) {
+export function comicPrompt({ name, from, lang, question, parts, story, title, relationship, about, photos }) {
   const language = LANG_NAME[lang] || "the storyteller's language";
   const roles = describeRoles({ name, from, relationship, about });
   const anySpoken = (parts || []).some((p) => p.text && p.spoken);
@@ -137,9 +138,13 @@ export function comicPrompt({ name, from, lang, question, parts, story, title, r
     `The story written from these answers and approved by the storyteller ("${title || ""}"):`,
     '"""', story || "", '"""',
     "",
+    `The reader is ${from || "the asker"}. Reading it, they must feel at once that this is THEIR story: their own ${roles.tellerRole}, their own family, their own question. It should move them to tears, through truth and tenderness, never through melodrama.`,
+    "",
     "Make it a real comic:",
     "- 3 or 4 pages, 3 or 4 panels per page, 10 to 14 panels in all.",
-    "- Page 1 sets the scene and hooks the reader. The middle shows the real moments with humour and life. The last page brings the emotional turn and a warm ending that answers the question; the last panel may come back to today.",
+    `- Frame it as a conversation between the two of them. Open in the present: ${from || "the asker"} asks ${name || "the storyteller"} the question (one or two panels, both drawn as they are today). Then go into the memory. End back in the present, the two of them together, with ${name || "the storyteller"} saying directly to ${from || "the asker"} what they answered at the end, in their own words. The last line should be the one that stays with the reader.`,
+    "- In the memory, show real scenes with real conversation between the people who were there: what they said to each other, as the storyteller remembers it. Let small true details carry the feeling: an object, a gesture, a look, a silence.",
+    "- Build the feeling: lightness and humour early, the turning point in the middle, the thing they never said near the end. Give the most emotional beat a silent wide panel.",
     "- Mix shot sizes: wide panels for places and big moments, square panels for faces and conversations.",
     `- Dialogue makes it alive: short, natural lines in ${language} (at most 15 words each, at most 2 bubbles per panel, some panels silent). Use the storyteller's own words and anything they quoted people saying. Humour where it fits, tenderness at the end.`,
     "- Narration boxes in first person, the storyteller's voice, at most 20 words, for time jumps and inner thoughts. Not every panel needs one.",
@@ -151,7 +156,15 @@ export function comicPrompt({ name, from, lang, question, parts, story, title, r
     `- When the storyteller says "you", that is ${from || "the asker"} — draw them as the ${roles.askerRole}, with the right gender. The storyteller is the ${roles.tellerRole}.`,
     `- Grammar in ${language} must match each speaker's gender.`,
     "",
+    ...(photos && photos.length ? [
+      "",
+      "We have real photos to draw from: " + photos.map((ph) => `${ph.name} (${ph.role}${ph.year ? `, photo from ${ph.year}` : ""})`).join("; ") + ".",
+      "Use exactly these names for those characters. For each, say in look how old they are in the memory and how old today, so the artist can draw them at the right age from the photo."
+    ] : []),
+    "",
     "For the artist (English):",
+    "- Say when the memory happens (story_period), and dress the scenes for that time and place.",
+    `- Characters who appear both today and in the memory (usually ${name || "the storyteller"}) need both looks described in look: "today: …; in the memory: …". In each panel's action, say which one we see.`,
     "- Give every character one consistent look and use it in every panel. Character genders must match the facts above.",
     "- For each panel say who stands on the left and who on the right; a speech bubble's side must match its speaker's side.",
     "- Settings and actions must be concrete and visual: place, time of day, weather, light, expressions, camera angle.",
@@ -191,23 +204,25 @@ export function stepsPrompt({ mainQuestion, name, from, lang, relationship, abou
   const address = FORMAL(relationship)
     ? { ru: 'respectful "Вы"', kk: 'respectful "Сіз"', en: '"you"' }[lang] || '"you"'
     : { ru: 'warm informal "ты"', kk: 'warm informal "сен"', en: '"you"' }[lang] || '"you"';
+  const roles = describeRoles({ name, from, relationship, about });
   return [
-    `${from || "A family member"} wants to ask ${name || "a loved one"}${RELATION[relationship] ? `, their ${RELATION[relationship]},` : ""} one big question:`,
+    `${from || "A family member"} wants to ask ${name || "a loved one"} one deeply personal question:`,
     `"${mainQuestion}"`,
+    roles.text,
     "",
-    `Write exactly 5 short, warm questions in ${language}, speaking directly to ${name || "them"} with the ${address}.`,
-    "Together they must lead them to tell the whole story that answers the big question. Put them in story order:",
-    "1. The beginning: where and when it was, who was there.",
-    "2. What happened: concrete scenes and details.",
-    "3. The key moment or turning point.",
-    "4. Feelings: what they felt then, and how they see it now.",
-    `5. What it means today, or what they would like ${from || "their family"} to know.`,
+    `Write exactly 5 short, warm questions in ${language}, speaking directly to ${name || "them"} with the ${address}, as ${from || "the asker"} would ask them in a quiet moment.`,
+    "Together they must lead them to tell the whole story behind the big question, the way they would tell it only to someone close. In story order:",
+    "1. The scene: where and when it was, who was there, and what they themselves looked like then (age, hair, what they wore). This is needed to draw them.",
+    "2. What happened, step by step, and what was said: ask for the actual words people spoke, as they remember them.",
+    "3. The moment everything turned, and the small detail they still remember from it (a sound, a smell, a gesture, an object).",
+    "4. What they felt but did not show or say at the time, something they may never have told anyone.",
+    `5. What they want to say to ${from || "the asker"} now, directly, after remembering all this.`,
     "",
     "Each question:",
     "- is easy to answer out loud in one to three minutes;",
-    "- invites concrete details where natural (names, places, colours, sounds, smells, objects);",
+    "- is specific to this big question, never generic;",
     "- asks one thing only, in at most 25 words;",
-    "- is gentle; never pushes into pain the big question doesn't ask about.",
+    "- is tender and safe: it invites honesty and never pressures. They may skip anything.",
     "Do not repeat the big question itself.",
     about && about.gender ? `${name || "They"} ${about.gender === "female" ? "is a woman" : "is a man"}: use matching grammar (e.g. Russian past tense endings).` : "If the grammar needs a gender and it is unknown, use a neutral form."
   ].join("\n");
